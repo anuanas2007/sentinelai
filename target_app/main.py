@@ -5,15 +5,10 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
+from logger import setup_logger
 
-structlog.configure(
-    processors=[
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.add_log_level,
-        structlog.processors.JSONRenderer(),
-    ],
-    logger_factory=structlog.PrintLoggerFactory(),
-)
+# Setup logging — writes to stdout and logs/app.log
+setup_logger()
 
 log = structlog.get_logger()
 
