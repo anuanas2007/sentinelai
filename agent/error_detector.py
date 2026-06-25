@@ -28,6 +28,7 @@ IMMEDIATE_ERRORS = {
     "order_failed_insufficient_stock",
     "order_failed_insufficient_balance",
     "order_failed_fk_violation",
+    "negative_balance_detected",
 }
 
 THRESHOLD_ERRORS = {
@@ -36,6 +37,31 @@ THRESHOLD_ERRORS = {
     "db_pool_exhausted",
     "db_deadlock",
     "db_connection_error",
+}
+
+# ============================================================
+# AI HANDOFF — narrowed on purpose.
+#
+# Most errors here are self-explanatory: the log line already is the
+# root cause ("user 99 not found" needs no LLM to explain). Calling
+# an AI reasoning engine on those would be decorative, not useful.
+#
+# AI is only worth invoking when the log line names *what* broke but
+# not *why* — that requires reading code or correlating signals, which
+# is exactly what an LLM is for. Right now that's true for:
+#   - negative_balance_detected: balance going negative is visible,
+#     but *why* requires reading the non-atomic check-then-write gap
+#     in db.py/main.py.
+#   - analytics_failed: ZeroDivisionError is visible, but *which*
+#     variable and *why* it's structurally always zero requires
+#     reading main.py.
+# A confirmed cascade is also AI-worthy regardless of which events
+# it involves — "is this real causation or coincidence" is itself a
+# genuine hypothesis question, not something the detector can answer.
+# ============================================================
+AI_WORTHY_EVENTS = {
+    "negative_balance_detected",
+    "analytics_failed",
 }
 
 # Thresholds for probabilistic errors
@@ -170,6 +196,14 @@ class ErrorDetector:
 
         return None
 
+    @staticmethod
+    def _requires_ai(event_name: str, cascade: Optional[str]) -> bool:
+        """
+        True only when the log line alone doesn't already contain the
+        root cause. See AI_WORTHY_EVENTS above for why.
+        """
+        return event_name in AI_WORTHY_EVENTS or cascade is not None
+
     def _handle_immediate(
         self,
         error_event: ErrorEvent,
@@ -190,7 +224,7 @@ class ErrorDetector:
             severity="immediate",
             pattern=cascade,
             context_window=context_window,
-            requires_ai=True
+            requires_ai=self._requires_ai(error_event.event, cascade)
         )
 
     def _handle_threshold(
@@ -217,7 +251,7 @@ class ErrorDetector:
                 severity="critical",
                 pattern=cascade,
                 context_window=context_window,
-                requires_ai=True
+                requires_ai=self._requires_ai(error_event.event, cascade)
             )
         elif error_count >= WARNING_THRESHOLD:
             return Incident(
