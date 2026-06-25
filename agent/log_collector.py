@@ -29,8 +29,23 @@ detector = ErrorDetector()
 ai_queue: "queue.Queue[Incident]" = queue.Queue()
 
 
+APP_CONTEXT = (
+    "The monitored app is a FastAPI service (target_app/main.py) backed by "
+    "Postgres (target_app/db.py). It has users (id, name, email, balance) "
+    "and items (name, stock); creating an order deducts both. main.py's "
+    "create_order reads current balance/stock (via db.get_user/db.get_item), "
+    "checks them in Python, then separately calls db.apply_order to write "
+    "the deduction. If you're investigating a balance/stock anomaly, check "
+    "whether that read-then-write sequence holds up under concurrent "
+    "requests -- don't assume it's safe just because each step looks "
+    "correct in isolation."
+)
+
+
 def _build_incident_summary(incident: Incident) -> str:
     lines = [
+        APP_CONTEXT,
+        "",
         f"Event: {incident.trigger_event.event}",
         f"Severity: {incident.severity}",
         f"Errors in window: {incident.error_count}",

@@ -178,4 +178,24 @@ Both input and output tokens are billed, separately. Three agents chained sequen
 
 ---
 
+### A pre-existing bug found while testing the cascade trigger: cascade detection never actually worked
+
+Tried to manually trigger a confirmed cascade pattern (alternating `/external` and `/users/99` three times each) to verify the third AI trigger. It never confirmed — `cascade_counts` stayed completely empty no matter how many times the sequence ran. Root cause, in `error_detector.py`'s `process_error`: `self.last_error = error_event` was being set **before** `_handle_immediate`/`_handle_threshold` (which call `_detect_cascade`) ran. By the time `_detect_cascade` checked `self.last_error.event != current.event`, `self.last_error` had already been overwritten to equal the current event — so the comparison could never be true. **Cascade detection has been silently broken since Week 1** — present in the original design, never caught because nothing had tested it against a real alternating sequence until this session.
+
+Fixed by moving the `self.last_error` update to after dispatch, so cascade detection compares against the *previous* error, not itself. Verified two ways: a deterministic standalone simulation of the exact sequence (confirms on the 3rd repetition as designed), and live against the running containers (`Cascade: external_api_timeout → user_not_found` printed, correctly queued for AI).
+
+This is also the second real, previously-unknown bug found purely by testing rather than by reading the code (the first was `/external`'s unhandled `JSONDecodeError`, below) — both were "passed review" in the sense that the code looked reasonable on inspection, but neither had ever actually been exercised end-to-end before this session.
+
+### A second pre-existing bug found in the same session: `/external` could fail silently with zero logging
+
+While trying to trigger the cascade above, `/external` returned a raw, unlogged 500 instead of the expected `external_api_timeout`. Cause: `httpbin.org/delay/5` (a third-party service this project doesn't control) sometimes returns a fast, non-JSON/empty response instead of timing out — `response.json()` then throws an unhandled `JSONDecodeError`, which had no `except` clause and therefore never reached `log.error(...)` at all. SentinelAI's entire pipeline was blind to this failure mode — not misclassified, genuinely invisible.
+
+Fixed with a broader `except Exception` clause logging a new `external_api_error` event (classified `threshold`, not AI-worthy — the exception message already names the failure clearly, same reasoning as `db_connection_error`). This is a good real-world lesson distinct from the cascade bug above: real external dependencies fail in ways the original code didn't anticipate, and "wrap every external call in error handling that actually logs, even for exceptions you didn't expect" is a genuine production lesson, not boilerplate paranoia.
+
+### Prompting improvements: addressing shallow reasoning
+
+First few live runs produced correct-but-shallow analysis — mostly restating the error message rather than naming a precise mechanism. Two changes to `_build_incident_summary` (`log_collector.py`) and the investigator task (`ai_engine.py`):
+1. Added `APP_CONTEXT` — a short, factual description of the app's actual architecture (FastAPI + Postgres, what tables exist, that `create_order` reads then separately writes via `db.apply_order`) so the model isn't reasoning about a financial bug with zero domain framing. Deliberately phrased as a neutral architectural fact ("check whether this holds up under concurrent requests") rather than stating the conclusion outright — telling the model the bug already exists would make the demo hollow.
+2. Told the investigator agent explicitly to follow cross-file function calls (e.g. if `main.py` calls `db.something(...)`, read `db.py` too) rather than stopping at the first file — the original prompt let it conclude from a single file even when the real mechanism spanned two.
+
 *(Redis and the traffic simulator sections to be added as each is built.)*
