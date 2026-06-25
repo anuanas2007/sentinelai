@@ -118,4 +118,92 @@ This is deliberate, not an oversight: this project's own Week 2 plan names this 
 
 ---
 
-*(Redis, traffic simulator, and AI reasoning engine sections to be added as each is built.)*
+## 3. AI Reasoning Engine
+
+**Goal:** When an incident's log line names *what* broke but not *why*, hand it to an LLM-backed pipeline that reads the actual code, proposes a root cause with a confidence score, and drafts a fix for a human to review. Never auto-applies anything.
+
+### Why most incidents never reach the AI at all
+
+Building this surfaced a real design flaw worth naming directly: by default, `requires_ai` had been set to `True` on every immediate/critical incident, including fully self-explanatory ones (`user_not_found` — the log line *is* the root cause). Calling an LLM on those would be decorative, not useful, and would undermine the project's own "AI debug agent" framing rather than support it.
+
+`AI_WORTHY_EVENTS` in `error_detector.py` now narrows this to exactly the cases where the log names the symptom but not the cause:
+- `negative_balance_detected` — visible that the balance went negative, not *why* (requires reading the non-atomic check-then-write gap in `db.py`/`main.py`)
+- `analytics_failed` — visible that it's a `ZeroDivisionError`, not *which* variable or *why* it's structurally always zero (requires reading `main.py`)
+- any confirmed cascade pattern — "is this real causation or coincidence" is a genuine hypothesis question the detector can flag but not answer
+
+`db_pool_exhausted`/`db_deadlock`/`db_connection_error` were deliberately left out: pool exhaustion *could* be AI-worthy (it can mean either genuine capacity pressure or a slow query/leak masking real capacity — a real ambiguity), but no instrumentation exists yet (e.g. per-connection hold-time logging) to give an LLM more to reason with than the bare event already says. Revisit once that instrumentation exists, rather than marking it AI-worthy prematurely.
+
+**A flagship trigger had a real gap that had to be fixed first:** the intentional balance race condition (kept deliberately non-atomic, see section 2 above) previously produced a *silent* data-integrity bug — two concurrent orders could overdraw a balance with no log event marking it as wrong, meaning there was no incident to ever hand off to AI in the first place. `db.apply_order` now returns the post-write balance via `UPDATE ... RETURNING`, and `create_order` logs `negative_balance_detected` when it goes negative — detected after the fact, not prevented; the race itself stays intentional. Verified for real: two genuinely concurrent orders against a user's exact balance both succeeded, balance went negative, and the agent raised an immediate incident showing both interleaved `creating_order` calls in context.
+
+### Multi-agent, not a single LLM call
+
+> Original design below was 3 agents; consolidated to 2 after testing — see "Then consolidated 3 agents down to 2" further down for why and what changed. Kept here as the record of the original reasoning, not the current state.
+
+Three CrewAI agents, run sequentially, each with one responsibility:
+1. **Retrieval agent** — reads relevant source files via a custom `read_source_file` tool, restricted to the target app's source directory only (filename basename only, no path traversal).
+2. **Hypothesis agent** — given the incident summary and retrieved code, states the most likely root cause with a confidence score, explicitly allowed to say "ambiguous" rather than overclaim.
+3. **Fix-proposal agent** — drafts a small code diff and plain-English explanation, explicitly instructed to state it is a *proposal requiring human review*, not an applied change.
+
+Chosen over a single call because each step is a genuinely distinct responsibility (reading code vs. diagnosing vs. proposing a fix), and over hand-rolled orchestration because the three-agent shape matches the project's own multi-agent design intent more directly than assembling it from raw SDK calls. LLM: OpenAI (`gpt-4o-mini` — root-cause text generation doesn't need a flagship model; swap the `LLM_MODEL` constant in `ai_engine.py` if a cheaper/newer model becomes available).
+
+**A real bug found during first live test: the retrieval agent guessed filenames instead of discovering them.** First end-to-end run, the fix-proposal agent returned a plausible-looking diff referencing functions that don't exist anywhere in this codebase (`get_balance`, `place_order`, `log_error`) — it had hallucinated a generic "race condition fix" rather than reasoning about the actual code. Traced it to the retrieval agent: given only `read_source_file` (which takes a filename), it guessed `order_processing.py`, then `logging.py`, both wrong (real files: `main.py`, `db.py`, `logger.py`) — it had no way to discover what files actually exist, only guess from naming convention. By the third guess it stumbled onto `main.py`, but the wasted attempts (and the model's limited reasoning budget) meant the final answer still wasn't well grounded.
+
+**Fix:** added a `list_source_files` tool the retrieval agent must call first, and tightened all three task descriptions to explicitly require quoting real code verbatim and explicitly forbid inventing function/variable names — including telling the hypothesis/fix agents to say "evidence insufficient" rather than fabricate a plausible-sounding answer. Re-tested: the retrieval agent listed the real directory, read `main.py` correctly on the first attempt, and the fix-proposal's diff correctly referenced the real `db.apply_order` function and correctly diagnosed the actual root cause (order applied, balance never re-validated afterward) — still not 100% verbatim (invented one non-existent helper, `db.get_user_balance`), but a genuine, substantively correct diagnosis rather than hallucinated filler. This is the expected ceiling for a cheap mini-model with a small reasoning budget — usable as a real v1, not pretending to be perfect.
+
+**Then consolidated 3 agents down to 2.** Worth being honest about a tradeoff here: 3 sequential agents (retrieval, hypothesis, fix-proposal) meant 3 LLM round-trips, compounding token cost (each agent's prompt includes the full previous agent's output), and — concretely — was the actual root cause of the bug above: the retrieval→hypothesis hand-off was the seam where a bad retrieval silently corrupted downstream reasoning, with no way for hypothesis to know retrieval had failed. The hypothesis→fix-proposal hand-off never caused a problem; diagnosing and proposing a fix are naturally sequential, tightly coupled steps. "Investigation" (find the code + figure out why) is naturally one continuous train of thought for a human engineer too — splitting it bought nothing and cost a real bug.
+
+Merged retrieval + hypothesis into one `investigator_agent` (both tools, one task: list files, read the relevant one(s), state root cause + confidence in the same pass). Kept `fix_agent` separate — that boundary is worth preserving even though it's "just" prompt structure, because it cleanly isolates the one agent explicitly forbidden from claiming a change was applied, matching the propose-only principle above. Re-tested after merging: fully grounded result this time, no invented names at all — quoted the real `await db.apply_order(...)` call and the real `log.error("negative_balance_detected", ...)` line verbatim. The proposed fix itself wasn't fully correct (it added a redundant balance re-check using an already-stale value, which doesn't actually close the TOCTOU gap — a real concurrency-correct fix would need locking, which is exactly the kind of subtlety a human reviewer should catch, not something to auto-apply) — but the grounding problem that mattered is solved.
+
+General lesson, not just specific to this project: don't add agent separation by default. Split a step into its own agent only when there's a concrete reason — a genuinely different toolset/data source, a need for independent/skeptical review (a critic checking another agent's own work), or a step that's actually multi-step/branching on its own (e.g. git-based multi-file tracing, planned for the next iteration, which may justify re-introducing a dedicated retrieval agent once it's no longer a 3-file lookup).
+
+### Propose-only, never auto-apply
+
+The fix-proposal agent's backstory and task explicitly state it is not authorized to apply changes — it drafts a diff and explanation for a human to review. This mirrors how real tools (Sentry AI, Copilot) draw this line: autonomous, unreviewed changes to running code/data is a known risk, not just caution for its own sake. If genuine autonomous *action* is wanted later, the safer scope for that is reversible infra remediation (auto-restart a crashed container, bump a pool size) — not auto-patching application code. Not built; flagged as a deliberate non-decision.
+
+### Decoupled from the log-watching loop
+
+`log_collector.py` is a single synchronous polling loop. Calling the CrewAI pipeline directly from `handle_error()` would block it for however long the three chained LLM calls take — any incident arriving during that window wouldn't be processed until the AI call finished. Instead, AI-worthy incidents go into a `queue.Queue()`; a background daemon thread (started once at startup) consumes it and runs the crew. `handle_error()` just does a non-blocking `queue.put()`.
+
+### Code retrieval: a known, documented scale limitation
+
+The retrieval agent reads `target_app`'s source via a Docker volume — `target_app/` is mounted read-only into `sentinel-agent` at `/app/target_app_src`. This is a deliberate toy-scale simplification, not a production pattern, and it's worth being explicit about why:
+
+At real scale, mounting one shared agent's filesystem access into every other service's live container doesn't work — production containers are frequently source-stripped via multi-stage Docker builds (no source present to mount at all), and giving one observability agent live filesystem access into every team's running containers is a serious security/blast-radius problem. It violates this project's own "neither knows the other's internals" principle worse than the Docker-SDK-log-streaming approach rejected back in section 1 — that gave an agent access to container orchestration; this gives it access to source code directly.
+
+The real pattern: fetch source via git/version-control APIs using the file path + line number from an error (decoupled from whatever's currently deployed), often backed by a pre-built searchable code index — the same idea as this project's own planned Week 3 vector memory, just applied to code instead of past incidents. **Planned follow-up:** switch the retrieval agent to git-based fetching in the next iteration; the volume mount is explicitly a placeholder, not the intended end state.
+
+### Cost
+
+Both input and output tokens are billed, separately. Three agents chained sequentially (`context=[earlier_task]`) means token usage compounds across the pipeline — later agents' inputs include earlier agents' full outputs. At this project's scale (a few thousand tokens per incident, incidents triggered manually/rarely) the cost is small, but it is real spend on a card, unlike using claude.ai or chatgpt.com's free chat tiers — the API is a separate, billed product.
+
+---
+
+### A pre-existing bug found while testing the cascade trigger: cascade detection never actually worked
+
+Tried to manually trigger a confirmed cascade pattern (alternating `/external` and `/users/99` three times each) to verify the third AI trigger. It never confirmed — `cascade_counts` stayed completely empty no matter how many times the sequence ran. Root cause, in `error_detector.py`'s `process_error`: `self.last_error = error_event` was being set **before** `_handle_immediate`/`_handle_threshold` (which call `_detect_cascade`) ran. By the time `_detect_cascade` checked `self.last_error.event != current.event`, `self.last_error` had already been overwritten to equal the current event — so the comparison could never be true. **Cascade detection has been silently broken since Week 1** — present in the original design, never caught because nothing had tested it against a real alternating sequence until this session.
+
+Fixed by moving the `self.last_error` update to after dispatch, so cascade detection compares against the *previous* error, not itself. Verified two ways: a deterministic standalone simulation of the exact sequence (confirms on the 3rd repetition as designed), and live against the running containers (`Cascade: external_api_timeout → user_not_found` printed, correctly queued for AI).
+
+This is also the second real, previously-unknown bug found purely by testing rather than by reading the code (the first was `/external`'s unhandled `JSONDecodeError`, below) — both were "passed review" in the sense that the code looked reasonable on inspection, but neither had ever actually been exercised end-to-end before this session.
+
+### A second pre-existing bug found in the same session: `/external` could fail silently with zero logging
+
+While trying to trigger the cascade above, `/external` returned a raw, unlogged 500 instead of the expected `external_api_timeout`. Cause: `httpbin.org/delay/5` (a third-party service this project doesn't control) sometimes returns a fast, non-JSON/empty response instead of timing out — `response.json()` then throws an unhandled `JSONDecodeError`, which had no `except` clause and therefore never reached `log.error(...)` at all. SentinelAI's entire pipeline was blind to this failure mode — not misclassified, genuinely invisible.
+
+Fixed with a broader `except Exception` clause logging a new `external_api_error` event (classified `threshold`, not AI-worthy — the exception message already names the failure clearly, same reasoning as `db_connection_error`). This is a good real-world lesson distinct from the cascade bug above: real external dependencies fail in ways the original code didn't anticipate, and "wrap every external call in error handling that actually logs, even for exceptions you didn't expect" is a genuine production lesson, not boilerplate paranoia.
+
+### Prompting improvements: addressing shallow reasoning
+
+First few live runs produced correct-but-shallow analysis — mostly restating the error message rather than naming a precise mechanism. Two changes to `_build_incident_summary` (`log_collector.py`) and the investigator task (`ai_engine.py`):
+1. Added `APP_CONTEXT` — a short, factual description of the app's actual architecture (FastAPI + Postgres, what tables exist, that `create_order` reads then separately writes via `db.apply_order`) so the model isn't reasoning about a financial bug with zero domain framing. Deliberately phrased as a neutral architectural fact ("check whether this holds up under concurrent requests") rather than stating the conclusion outright — telling the model the bug already exists would make the demo hollow.
+2. Told the investigator agent explicitly to follow cross-file function calls (e.g. if `main.py` calls `db.something(...)`, read `db.py` too) rather than stopping at the first file — the original prompt let it conclude from a single file even when the real mechanism spanned two.
+
+### Expanded AI_WORTHY_EVENTS: external_api_timeout and external_api_error
+
+Original classification excluded these as "self-explanatory" — wrong, on reflection. There's a real gap (the log only says "no response in 3s," not why), it just can't be closed by reading our own code *about the third party* (we have no visibility into `httpbin.org`'s internals). But there's a different, real, code-discoverable gap: `main.py`'s `/external` endpoint calls a **5-second-delay endpoint with a 3-second client timeout** — guaranteed to fail by construction, not actually "flaky third-party dependency." That mismatch is visible by reading `main.py` alone; the log line never states it.
+
+Added both events to `AI_WORTHY_EVENTS`, and extended `APP_CONTEXT` to point the investigator at "is our own usage/defensive coding adequate" rather than "speculate about the third party." Verified live: confidence 1.0, correctly identified the 3s-vs-5s mismatch, proposed raising the timeout to 6s — a genuinely correct fix, not just plausible-sounding, for an insight nothing in this project had surfaced before this conversation.
+
+General lesson: "is the log line self-explanatory" isn't really the right test for AI-worthiness on its own — better test is "does *our own code* contain a discoverable insight beyond the proximate symptom," even when the ultimate external cause is unknowable. db_pool_exhausted/db_deadlock/db_connection_error remain excluded specifically because no comparable code-level insight exists *yet* (no hold-time instrumentation) — not because the question itself is unanswerable in principle.
+
+*(Redis and the traffic simulator sections to be added as each is built.)*

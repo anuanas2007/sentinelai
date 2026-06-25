@@ -34,8 +34,14 @@ services:
     environment:
       - LOG_PATH=/app/logs/app.log
       - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - TARGET_APP_SRC=/app/target_app_src
     volumes:
       - log-data:/app/logs:ro
+      # Read-only access to the app's source for the retrieval agent.
+      # Toy-scale simplification -- see SECOND_ITERATION_ARCHITECTURE.md
+      # for why this doesn't scale and the planned git-based follow-up.
+      - ./target_app:/app/target_app_src:ro
 
 volumes:
   log-data:

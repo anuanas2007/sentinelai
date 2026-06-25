@@ -176,3 +176,13 @@ async def call_external():
                   error="External API did not respond within 3 seconds",
                   error_type="TimeoutException")
         raise HTTPException(status_code=503, detail="External service unavailable")
+    except Exception as e:
+        # Real third-party services don't always fail the way you expect --
+        # discovered live that httpbin.org can return a non-JSON/empty body
+        # instead of timing out, which previously crashed with an unlogged
+        # 500. Anything other than a clean timeout lands here so it's at
+        # least visible to the agent instead of silently invisible.
+        log.error("external_api_error",
+                  error=str(e),
+                  error_type=type(e).__name__)
+        raise HTTPException(status_code=503, detail="External service unavailable")

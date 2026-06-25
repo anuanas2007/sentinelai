@@ -33,6 +33,7 @@ IMMEDIATE_ERRORS = {
 
 THRESHOLD_ERRORS = {
     "external_api_timeout",
+    "external_api_error",
     "analytics_failed",
     "db_pool_exhausted",
     "db_deadlock",
@@ -55,6 +56,17 @@ THRESHOLD_ERRORS = {
 #   - analytics_failed: ZeroDivisionError is visible, but *which*
 #     variable and *why* it's structurally always zero requires
 #     reading main.py.
+#   - external_api_timeout / external_api_error: the proximate cause
+#     (timeout, bad response) can't be explained by reading OUR code --
+#     that part lives entirely inside a third party we have no
+#     visibility into. But our own code has a real, discoverable gap:
+#     /external calls a 5-second-delay endpoint with a 3-second timeout
+#     (guaranteed to fail by construction, not really "flaky
+#     dependency"), and call_external() never checks response.status_code
+#     or validates the response is JSON before parsing it. AI here isn't
+#     "investigate httpbin's internals" (impossible) -- it's "investigate
+#     whether our own usage/defensive coding is adequate" (discoverable
+#     by reading main.py).
 # A confirmed cascade is also AI-worthy regardless of which events
 # it involves — "is this real causation or coincidence" is itself a
 # genuine hypothesis question, not something the detector can answer.
@@ -62,6 +74,8 @@ THRESHOLD_ERRORS = {
 AI_WORTHY_EVENTS = {
     "negative_balance_detected",
     "analytics_failed",
+    "external_api_timeout",
+    "external_api_error",
 }
 
 # Thresholds for probabilistic errors
@@ -291,12 +305,19 @@ class ErrorDetector:
         )
 
         self.error_counts[event_name] += 1
-        self.last_error = error_event
 
         if error_class == "immediate":
-            return self._handle_immediate(error_event, context_window)
+            result = self._handle_immediate(error_event, context_window)
         else:
-            return self._handle_threshold(error_event, context_window)
+            result = self._handle_threshold(error_event, context_window)
+
+        # Updated only after cascade detection has compared error_event
+        # against the *previous* last_error. Setting this earlier (as it
+        # used to be) made every event its own "last_error" before the
+        # comparison ran, so the != check could never be true and no
+        # cascade was ever confirmed, in any iteration, until this fix.
+        self.last_error = error_event
+        return result
 
     def get_stats(self) -> dict:
         """Current detector stats — feeds into dashboard in Week 3."""
