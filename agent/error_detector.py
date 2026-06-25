@@ -28,6 +28,7 @@ IMMEDIATE_ERRORS = {
     "order_failed_insufficient_stock",
     "order_failed_insufficient_balance",
     "order_failed_fk_violation",
+    "negative_balance_detected",
 }
 
 THRESHOLD_ERRORS = {

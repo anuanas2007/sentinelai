@@ -103,7 +103,7 @@ async def create_order(order: OrderRequest):
     # Write — deliberately not re-checking balance/stock here. See
     # docs/SECOND_ITERATION_ARCHITECTURE.md for why this gap is intentional.
     try:
-        await db.apply_order(order.user_id, order.item, order.quantity, total)
+        new_balance = await db.apply_order(order.user_id, order.item, order.quantity, total)
     except db.DBForeignKeyViolation as e:
         log.error("order_failed_fk_violation",
                   user_id=order.user_id, item=order.item, error=str(e))
@@ -119,6 +119,14 @@ async def create_order(order: OrderRequest):
         raise HTTPException(status_code=503, detail="Database connection error")
 
     log.info("order_created_successfully", user_id=order.user_id, item=order.item)
+
+    # Detected after the fact, not prevented — this is what makes the
+    # earlier non-atomic check-then-write race condition actually visible
+    # as an incident instead of a silent data-integrity bug.
+    if new_balance < 0:
+        log.error("negative_balance_detected",
+                  user_id=order.user_id, balance=new_balance)
+
     return {"status": "success", "total_charged": total}
 
 

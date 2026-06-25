@@ -114,8 +114,11 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
                     "UPDATE items SET stock = stock - $1 WHERE name = $2",
                     quantity, item_name,
                 )
-                await conn.execute(
-                    "UPDATE users SET balance = balance - $1 WHERE id = $2",
+                # RETURNING lets the caller see the post-write balance without
+                # a second query — used to detect the race condition's effect
+                # (a negative balance) after the fact, not to prevent it.
+                new_balance = await conn.fetchval(
+                    "UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance",
                     total_charged, user_id,
                 )
                 await conn.execute(
@@ -129,3 +132,5 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
             raise DBDeadlock(str(e))
     finally:
         await _pool.release(conn)
+
+    return float(new_balance)
