@@ -54,4 +54,68 @@ Week 1 proved the core logic works. Docker adds reproducibility and proper isola
 
 ---
 
-*(Postgres, Redis, traffic simulator, and AI reasoning engine sections to be added as each is built.)*
+## 2. PostgreSQL — Real Database
+
+**Goal:** Replace `USERS_DB`/`INVENTORY` (in-memory dicts) with a real Postgres database, so failure modes that only exist in real databases — connection pool exhaustion, FK violations, deadlocks — become genuinely reproducible instead of simulated with `random.random()`.
+
+### Driver: `asyncpg`, raw SQL, no ORM
+
+Two real options: `asyncpg` (raw SQL, async-native) vs SQLAlchemy 2.0 async (ORM). Chose `asyncpg`. Reasons:
+- **Direct pool control.** `asyncpg.create_pool(min_size=, max_size=)` lets the pool size itself be small and deliberate (`min_size=2, max_size=5` — see below), which is what makes pool exhaustion a real, reproducible failure under concurrent load rather than a coin flip. An ORM's pool is a layer further removed from this control.
+- **Transparency for root-cause tracing.** The whole point of this project is reasoning about *why* something broke. Raw SQL means the future AI reasoning engine can read the exact query that failed; an ORM would generate that SQL implicitly, adding a layer to reverse-engineer.
+- Consistent with the project's existing async-everywhere stance (FastAPI, `httpx` over `requests`).
+
+An ORM + Alembic would be more resume-conventional, but the convenience (relationship modeling, migration tooling) isn't needed for 3 small, fixed tables — it would be complexity for its own sake.
+
+### Schema: 3 tables, plain `init.sql`, no migrations tool
+
+`users`, `items`, `orders` (see `db/init.sql`) — `orders` is new; Week 1 only ever mutated balance/stock in memory with no order history. Adding it gives:
+- A real **foreign key constraint** (`orders.user_id → users.id`, `orders.item_name → items.name`) — directly enables the "FK violation" failure mode from the original Week 2 plan. MongoDB/NoSQL alternatives were considered and rejected here specifically because they have no FK concept — there'd be nothing to violate, and this failure mode would have to be faked in application code instead of coming from the database engine itself.
+- Order history for the AI reasoning engine to trace later.
+
+Schema is created once via Postgres's own `docker-entrypoint-initdb.d` mechanism (plain SQL file, auto-run on first container start against an empty volume) rather than Alembic. The schema isn't expected to evolve mid-iteration — versioned migrations would be solving a problem this project doesn't have yet, the same reasoning Week 1 used to justify deferring Docker until the core logic worked.
+
+### Connection pool: small and timed out on purpose
+
+`min_size=2, max_size=5`, with `pool.acquire(timeout=3.0)` (`target_app/db.py`). A small pool means a 6th concurrent request genuinely has to wait for a connection to free up — real exhaustion, not simulated. The timeout turns "no connection available" into a controlled, catchable `DBPoolExhausted` exception instead of a request hanging forever.
+
+**Honesty about manual verification:** tested with bursts of 20 and then 300 concurrent requests against `/users/{id}` — both returned all `200`s, no exhaustion triggered. This is expected, not a bug: each query is a single-row `SELECT` that completes in microseconds, so even 300 requests cycle through 5 connections faster than the 3-second timeout could ever be hit. The pool/timeout mechanism is correct by code inspection, but a one-off burst of fast queries can't actually produce sustained contention. Real verification of this failure mode is pending the traffic simulator (later this week), which can generate *sustained* concurrent load over time rather than a single burst — same "documented as a gap, not faked" approach as the `db_deadlock` caveat below.
+
+### Mapping real Postgres failures onto the existing two-mode classifier
+
+New events added to `agent/error_detector.py`'s existing `IMMEDIATE_ERRORS`/`THRESHOLD_ERRORS` sets — **no changes to the detector's logic itself**, which is a good sign the Week 1 classification design generalizes beyond simulated failures:
+
+| Event | Class | Why |
+|---|---|---|
+| `order_failed_fk_violation` | immediate | a dangling reference is a real bug, not a transient blip |
+| `db_pool_exhausted` | threshold | one slow moment under load is noise; a pattern means a real capacity problem |
+| `db_deadlock` | threshold | Postgres's own deadlock detector already resolves a single deadlock by killing one transaction; only a recurring pattern signals real contention |
+| `db_connection_error` | threshold | one connection blip (e.g. Postgres restarting) vs. a real outage |
+
+`db_timeout` (the Week 1 simulated event) was removed from `THRESHOLD_ERRORS` since nothing emits it anymore — see below.
+
+**`db.py` raises its own typed exceptions** (`DBPoolExhausted`, `DBConnectionError`, `DBDeadlock`, `DBForeignKeyViolation`) rather than letting `asyncpg`'s exception types leak into `main.py`. Same "clean contract between layers" reasoning as the `Incident` dataclass in Week 1 — `main.py` only needs to know these four names, never `asyncpg` internals.
+
+**Honesty about `db_deadlock`:** a real Postgres deadlock needs two transactions acquiring the same rows in opposite order. `apply_order` always touches `items` → `users` → `orders` in that same order on every call, so this specific code path is unlikely to produce a genuine deadlock under normal load. The classification and handler are kept (defensive, matches the agreed design), but triggering it for real would need a second code path with reversed lock ordering — not built yet, flagged here rather than overclaimed.
+
+### Removed the simulated `db_timeout`
+
+Week 1's `get_user` had `if random.random() < 0.2: await asyncio.sleep(5)` to fake a DB timeout. Once Postgres is real, that randomness should come from genuine concurrency pressure on the connection pool, not a coin flip — keeping both would mean two unrelated things produce the same log event, which muddies what `db_timeout` actually means. Removed entirely; `db_pool_exhausted`/`db_connection_error` are now the only DB-failure events, and they only fire from real conditions.
+
+### The intentional race condition (kept, not fixed)
+
+`create_order` reads the user's balance and the item's stock (`db.get_user`, `db.get_item`), checks them in Python, *then* writes via `db.apply_order` — and nothing re-validates that read at write time. Two concurrent orders from the same user can both read "balance = 100," both pass the check, both write, both succeed — overdrawing the balance.
+
+This is deliberate, not an oversight: this project's own Week 2 plan names this exact scenario as a planned root-cause demo for the AI reasoning engine ("root cause: balance update not atomic — race condition"). Fixing it now with `SELECT ... FOR UPDATE` or an atomic conditional `UPDATE` would remove the bug the roadmap is counting on existing later. `apply_order`'s three internal writes (stock, balance, order insert) *are* wrapped in a transaction — that only prevents *this function* from partially applying (e.g. on a mid-write crash), it does not close the race with the earlier read, which is exactly where the intentional gap lives.
+
+### Credentials: `.env`, gitignored, referenced by name only
+
+`POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` live in `.env` (gitignored) with `.env.example` committed as a placeholder template. `docker-compose.yml` and `target_app`'s `DATABASE_URL` reference these by `${VAR}` substitution — nothing in the codebase needs to know the actual values. For this project, the password's strength barely matters in practice (Postgres isn't exposed to the host or the internet — only `target-app`'s container can reach it over Docker's internal network), but the credentials/`.env` boundary is the actual safety mechanism regardless of exposure, which is why it's enforced anyway.
+
+### Startup ordering: healthcheck, not just `depends_on`
+
+`depends_on: postgres` alone only waits for the *container process* to start, not for Postgres to be ready to accept connections (it takes a couple seconds to initialize on a cold start). Without a healthcheck, `target-app` could start and immediately fail its first connection attempt. Fixed with a `pg_isready` healthcheck on the `postgres` service and `depends_on: postgres: condition: service_healthy` on `target-app`.
+
+---
+
+*(Redis, traffic simulator, and AI reasoning engine sections to be added as each is built.)*

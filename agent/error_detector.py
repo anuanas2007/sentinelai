@@ -27,12 +27,15 @@ IMMEDIATE_ERRORS = {
     "order_failed_user_not_found",
     "order_failed_insufficient_stock",
     "order_failed_insufficient_balance",
+    "order_failed_fk_violation",
 }
 
 THRESHOLD_ERRORS = {
-    "db_timeout",
     "external_api_timeout",
     "analytics_failed",
+    "db_pool_exhausted",
+    "db_deadlock",
+    "db_connection_error",
 }
 
 # Thresholds for probabilistic errors
