@@ -118,4 +118,56 @@ This is deliberate, not an oversight: this project's own Week 2 plan names this 
 
 ---
 
-*(Redis, traffic simulator, and AI reasoning engine sections to be added as each is built.)*
+## 3. AI Reasoning Engine
+
+**Goal:** When an incident's log line names *what* broke but not *why*, hand it to an LLM-backed pipeline that reads the actual code, proposes a root cause with a confidence score, and drafts a fix for a human to review. Never auto-applies anything.
+
+### Why most incidents never reach the AI at all
+
+Building this surfaced a real design flaw worth naming directly: by default, `requires_ai` had been set to `True` on every immediate/critical incident, including fully self-explanatory ones (`user_not_found` — the log line *is* the root cause). Calling an LLM on those would be decorative, not useful, and would undermine the project's own "AI debug agent" framing rather than support it.
+
+`AI_WORTHY_EVENTS` in `error_detector.py` now narrows this to exactly the cases where the log names the symptom but not the cause:
+- `negative_balance_detected` — visible that the balance went negative, not *why* (requires reading the non-atomic check-then-write gap in `db.py`/`main.py`)
+- `analytics_failed` — visible that it's a `ZeroDivisionError`, not *which* variable or *why* it's structurally always zero (requires reading `main.py`)
+- any confirmed cascade pattern — "is this real causation or coincidence" is a genuine hypothesis question the detector can flag but not answer
+
+`db_pool_exhausted`/`db_deadlock`/`db_connection_error` were deliberately left out: pool exhaustion *could* be AI-worthy (it can mean either genuine capacity pressure or a slow query/leak masking real capacity — a real ambiguity), but no instrumentation exists yet (e.g. per-connection hold-time logging) to give an LLM more to reason with than the bare event already says. Revisit once that instrumentation exists, rather than marking it AI-worthy prematurely.
+
+**A flagship trigger had a real gap that had to be fixed first:** the intentional balance race condition (kept deliberately non-atomic, see section 2 above) previously produced a *silent* data-integrity bug — two concurrent orders could overdraw a balance with no log event marking it as wrong, meaning there was no incident to ever hand off to AI in the first place. `db.apply_order` now returns the post-write balance via `UPDATE ... RETURNING`, and `create_order` logs `negative_balance_detected` when it goes negative — detected after the fact, not prevented; the race itself stays intentional. Verified for real: two genuinely concurrent orders against a user's exact balance both succeeded, balance went negative, and the agent raised an immediate incident showing both interleaved `creating_order` calls in context.
+
+### Multi-agent, not a single LLM call
+
+Three CrewAI agents, run sequentially, each with one responsibility:
+1. **Retrieval agent** — reads relevant source files via a custom `read_source_file` tool, restricted to the target app's source directory only (filename basename only, no path traversal).
+2. **Hypothesis agent** — given the incident summary and retrieved code, states the most likely root cause with a confidence score, explicitly allowed to say "ambiguous" rather than overclaim.
+3. **Fix-proposal agent** — drafts a small code diff and plain-English explanation, explicitly instructed to state it is a *proposal requiring human review*, not an applied change.
+
+Chosen over a single call because each step is a genuinely distinct responsibility (reading code vs. diagnosing vs. proposing a fix), and over hand-rolled orchestration because the three-agent shape matches the project's own multi-agent design intent more directly than assembling it from raw SDK calls. LLM: OpenAI (`gpt-4o-mini` — root-cause text generation doesn't need a flagship model; swap the `LLM_MODEL` constant in `ai_engine.py` if a cheaper/newer model becomes available).
+
+**A real bug found during first live test: the retrieval agent guessed filenames instead of discovering them.** First end-to-end run, the fix-proposal agent returned a plausible-looking diff referencing functions that don't exist anywhere in this codebase (`get_balance`, `place_order`, `log_error`) — it had hallucinated a generic "race condition fix" rather than reasoning about the actual code. Traced it to the retrieval agent: given only `read_source_file` (which takes a filename), it guessed `order_processing.py`, then `logging.py`, both wrong (real files: `main.py`, `db.py`, `logger.py`) — it had no way to discover what files actually exist, only guess from naming convention. By the third guess it stumbled onto `main.py`, but the wasted attempts (and the model's limited reasoning budget) meant the final answer still wasn't well grounded.
+
+**Fix:** added a `list_source_files` tool the retrieval agent must call first, and tightened all three task descriptions to explicitly require quoting real code verbatim and explicitly forbid inventing function/variable names — including telling the hypothesis/fix agents to say "evidence insufficient" rather than fabricate a plausible-sounding answer. Re-tested: the retrieval agent listed the real directory, read `main.py` correctly on the first attempt, and the fix-proposal's diff correctly referenced the real `db.apply_order` function and correctly diagnosed the actual root cause (order applied, balance never re-validated afterward) — still not 100% verbatim (invented one non-existent helper, `db.get_user_balance`), but a genuine, substantively correct diagnosis rather than hallucinated filler. This is the expected ceiling for a cheap mini-model with a small reasoning budget — usable as a real v1, not pretending to be perfect.
+
+### Propose-only, never auto-apply
+
+The fix-proposal agent's backstory and task explicitly state it is not authorized to apply changes — it drafts a diff and explanation for a human to review. This mirrors how real tools (Sentry AI, Copilot) draw this line: autonomous, unreviewed changes to running code/data is a known risk, not just caution for its own sake. If genuine autonomous *action* is wanted later, the safer scope for that is reversible infra remediation (auto-restart a crashed container, bump a pool size) — not auto-patching application code. Not built; flagged as a deliberate non-decision.
+
+### Decoupled from the log-watching loop
+
+`log_collector.py` is a single synchronous polling loop. Calling the CrewAI pipeline directly from `handle_error()` would block it for however long the three chained LLM calls take — any incident arriving during that window wouldn't be processed until the AI call finished. Instead, AI-worthy incidents go into a `queue.Queue()`; a background daemon thread (started once at startup) consumes it and runs the crew. `handle_error()` just does a non-blocking `queue.put()`.
+
+### Code retrieval: a known, documented scale limitation
+
+The retrieval agent reads `target_app`'s source via a Docker volume — `target_app/` is mounted read-only into `sentinel-agent` at `/app/target_app_src`. This is a deliberate toy-scale simplification, not a production pattern, and it's worth being explicit about why:
+
+At real scale, mounting one shared agent's filesystem access into every other service's live container doesn't work — production containers are frequently source-stripped via multi-stage Docker builds (no source present to mount at all), and giving one observability agent live filesystem access into every team's running containers is a serious security/blast-radius problem. It violates this project's own "neither knows the other's internals" principle worse than the Docker-SDK-log-streaming approach rejected back in section 1 — that gave an agent access to container orchestration; this gives it access to source code directly.
+
+The real pattern: fetch source via git/version-control APIs using the file path + line number from an error (decoupled from whatever's currently deployed), often backed by a pre-built searchable code index — the same idea as this project's own planned Week 3 vector memory, just applied to code instead of past incidents. **Planned follow-up:** switch the retrieval agent to git-based fetching in the next iteration; the volume mount is explicitly a placeholder, not the intended end state.
+
+### Cost
+
+Both input and output tokens are billed, separately. Three agents chained sequentially (`context=[earlier_task]`) means token usage compounds across the pipeline — later agents' inputs include earlier agents' full outputs. At this project's scale (a few thousand tokens per incident, incidents triggered manually/rarely) the cost is small, but it is real spend on a card, unlike using claude.ai or chatgpt.com's free chat tiers — the API is a separate, billed product.
+
+---
+
+*(Redis and the traffic simulator sections to be added as each is built.)*

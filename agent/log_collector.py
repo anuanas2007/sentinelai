@@ -1,9 +1,12 @@
 import json
 import time
 import os
+import queue
+import threading
 from collections import deque
 from typing import Optional
 from error_detector import ErrorDetector, Incident
+import ai_engine
 
 # ============================================================
 # RING BUFFER
@@ -16,6 +19,58 @@ log_buffer: deque = deque(maxlen=LOG_BUFFER_SIZE)
 
 # Single detector instance — stateful, lives for the lifetime of the collector
 detector = ErrorDetector()
+
+# ============================================================
+# AI DISPATCH QUEUE
+# requires_ai incidents go here instead of being analyzed inline.
+# A background thread (started in __main__) consumes this queue, so
+# the log-watching loop below never blocks waiting on an LLM call.
+# ============================================================
+ai_queue: "queue.Queue[Incident]" = queue.Queue()
+
+
+def _build_incident_summary(incident: Incident) -> str:
+    lines = [
+        f"Event: {incident.trigger_event.event}",
+        f"Severity: {incident.severity}",
+        f"Errors in window: {incident.error_count}",
+    ]
+    if incident.pattern:
+        lines.append(f"Cascade pattern: {incident.pattern}")
+    if incident.trigger_event.context:
+        lines.append(f"Event context: {incident.trigger_event.context}")
+    lines.append("Recent log lines:")
+    for entry in incident.context_window[-10:]:
+        lines.append(f"  [{entry.get('level', 'info').upper()}] {entry.get('event', '')}")
+    return "\n".join(lines)
+
+
+def ai_worker_loop():
+    """
+    Runs forever in a background thread. Pulls one incident at a time
+    off ai_queue and runs the CrewAI pipeline on it — this is the only
+    place in the agent that makes a blocking LLM call.
+    """
+    while True:
+        incident = ai_queue.get()
+        try:
+            summary = _build_incident_summary(incident)
+            print(f"\n🤖 [SentinelAI] Running AI analysis on '{incident.trigger_event.event}'...", flush=True)
+            result = ai_engine.analyze_incident(summary)
+            print("\n" + "=" * 60, flush=True)
+            print("🤖 AI ANALYSIS RESULT")
+            print("=" * 60)
+            print(result)
+            print("=" * 60 + "\n", flush=True)
+        except Exception:
+            # Full traceback, not just str(e) — some exceptions (and
+            # CrewAI's own error wrapping) produce an unhelpful empty
+            # or generic message otherwise.
+            import traceback
+            print("⚠️  [SentinelAI] AI analysis failed:", flush=True)
+            traceback.print_exc()
+        finally:
+            ai_queue.task_done()
 
 
 def parse_log_line(line: str) -> Optional[dict]:
@@ -83,7 +138,11 @@ def handle_error(error_entry: dict):
         print(f"  Cascade    : {incident.pattern}")
 
     if incident.requires_ai:
-        print(f"\n  🤖 AI reasoning engine will be invoked here in Week 2")
+        if os.environ.get("OPENAI_API_KEY"):
+            ai_queue.put(incident)
+            print(f"\n  🤖 Queued for AI analysis (running in background)")
+        else:
+            print(f"\n  🤖 Would queue for AI analysis, but OPENAI_API_KEY is not set — skipping")
 
     # Show context
     recent = incident.context_window[-10:]
@@ -157,6 +216,13 @@ def watch_log_file(log_path: str):
 
 
 if __name__ == "__main__":
+    # Daemon thread so it doesn't block process exit; started once,
+    # before the log-watching loop, since the loop runs forever.
+    if os.environ.get("OPENAI_API_KEY"):
+        threading.Thread(target=ai_worker_loop, daemon=True).start()
+    else:
+        print("[SentinelAI] OPENAI_API_KEY not set — AI analysis disabled")
+
     # LOG_PATH env var lets docker-compose point this at the shared
     # volume mount without changing the local dev default.
     LOG_PATH = os.environ.get("LOG_PATH", "logs/app.log")
