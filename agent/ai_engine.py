@@ -76,6 +76,21 @@ class ReadSourceFileTool(BaseTool):
             return f.read()
 
 
+def _stage_callback(stage_label: str):
+    """
+    Prints a clean, labeled block to stdout when a task finishes --
+    visible in `docker compose logs sentinel-agent`, distinct from
+    CrewAI's own raw verbose debug output (which stays off by default).
+    """
+    def callback(output):
+        text = getattr(output, "raw", None) or str(output)
+        print(f"\n🔎 STAGE: {stage_label}", flush=True)
+        print("-" * 60)
+        print(text)
+        print("-" * 60, flush=True)
+    return callback
+
+
 def _build_crew(incident_summary: str) -> Crew:
     investigator_agent = Agent(
         role="Incident Investigator",
@@ -142,6 +157,7 @@ def _build_crew(incident_summary: str) -> Crew:
             "statement that the evidence is insufficient."
         ),
         agent=investigator_agent,
+        callback=_stage_callback("Investigation (file retrieval + root cause)"),
     )
 
     fix_task = Task(
@@ -165,6 +181,7 @@ def _build_crew(incident_summary: str) -> Crew:
         ),
         agent=fix_agent,
         context=[investigator_task],
+        callback=_stage_callback("Fix proposal (human review required)"),
     )
 
     return Crew(
