@@ -198,4 +198,12 @@ First few live runs produced correct-but-shallow analysis — mostly restating t
 1. Added `APP_CONTEXT` — a short, factual description of the app's actual architecture (FastAPI + Postgres, what tables exist, that `create_order` reads then separately writes via `db.apply_order`) so the model isn't reasoning about a financial bug with zero domain framing. Deliberately phrased as a neutral architectural fact ("check whether this holds up under concurrent requests") rather than stating the conclusion outright — telling the model the bug already exists would make the demo hollow.
 2. Told the investigator agent explicitly to follow cross-file function calls (e.g. if `main.py` calls `db.something(...)`, read `db.py` too) rather than stopping at the first file — the original prompt let it conclude from a single file even when the real mechanism spanned two.
 
+### Expanded AI_WORTHY_EVENTS: external_api_timeout and external_api_error
+
+Original classification excluded these as "self-explanatory" — wrong, on reflection. There's a real gap (the log only says "no response in 3s," not why), it just can't be closed by reading our own code *about the third party* (we have no visibility into `httpbin.org`'s internals). But there's a different, real, code-discoverable gap: `main.py`'s `/external` endpoint calls a **5-second-delay endpoint with a 3-second client timeout** — guaranteed to fail by construction, not actually "flaky third-party dependency." That mismatch is visible by reading `main.py` alone; the log line never states it.
+
+Added both events to `AI_WORTHY_EVENTS`, and extended `APP_CONTEXT` to point the investigator at "is our own usage/defensive coding adequate" rather than "speculate about the third party." Verified live: confidence 1.0, correctly identified the 3s-vs-5s mismatch, proposed raising the timeout to 6s — a genuinely correct fix, not just plausible-sounding, for an insight nothing in this project had surfaced before this conversation.
+
+General lesson: "is the log line self-explanatory" isn't really the right test for AI-worthiness on its own — better test is "does *our own code* contain a discoverable insight beyond the proximate symptom," even when the ultimate external cause is unknowable. db_pool_exhausted/db_deadlock/db_connection_error remain excluded specifically because no comparable code-level insight exists *yet* (no hold-time instrumentation) — not because the question itself is unanswerable in principle.
+
 *(Redis and the traffic simulator sections to be added as each is built.)*

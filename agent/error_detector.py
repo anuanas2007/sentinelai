@@ -56,6 +56,17 @@ THRESHOLD_ERRORS = {
 #   - analytics_failed: ZeroDivisionError is visible, but *which*
 #     variable and *why* it's structurally always zero requires
 #     reading main.py.
+#   - external_api_timeout / external_api_error: the proximate cause
+#     (timeout, bad response) can't be explained by reading OUR code --
+#     that part lives entirely inside a third party we have no
+#     visibility into. But our own code has a real, discoverable gap:
+#     /external calls a 5-second-delay endpoint with a 3-second timeout
+#     (guaranteed to fail by construction, not really "flaky
+#     dependency"), and call_external() never checks response.status_code
+#     or validates the response is JSON before parsing it. AI here isn't
+#     "investigate httpbin's internals" (impossible) -- it's "investigate
+#     whether our own usage/defensive coding is adequate" (discoverable
+#     by reading main.py).
 # A confirmed cascade is also AI-worthy regardless of which events
 # it involves — "is this real causation or coincidence" is itself a
 # genuine hypothesis question, not something the detector can answer.
@@ -63,6 +74,8 @@ THRESHOLD_ERRORS = {
 AI_WORTHY_EVENTS = {
     "negative_balance_detected",
     "analytics_failed",
+    "external_api_timeout",
+    "external_api_error",
 }
 
 # Thresholds for probabilistic errors

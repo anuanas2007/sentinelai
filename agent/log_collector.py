@@ -38,7 +38,14 @@ APP_CONTEXT = (
     "the deduction. If you're investigating a balance/stock anomaly, check "
     "whether that read-then-write sequence holds up under concurrent "
     "requests -- don't assume it's safe just because each step looks "
-    "correct in isolation."
+    "correct in isolation. main.py also has a call_external() function "
+    "that calls a third-party HTTP endpoint with a fixed client timeout "
+    "and parses the response as JSON. If you're investigating an "
+    "external_api_timeout/external_api_error incident, you have no "
+    "visibility into the third party itself -- focus on whether OUR "
+    "code's timeout value, status-code handling, and response parsing "
+    "are appropriate for what it's actually calling, rather than "
+    "speculating about the third party's internals."
 )
 
 
