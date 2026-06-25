@@ -33,6 +33,7 @@ IMMEDIATE_ERRORS = {
 
 THRESHOLD_ERRORS = {
     "external_api_timeout",
+    "external_api_error",
     "analytics_failed",
     "db_pool_exhausted",
     "db_deadlock",
@@ -291,12 +292,19 @@ class ErrorDetector:
         )
 
         self.error_counts[event_name] += 1
-        self.last_error = error_event
 
         if error_class == "immediate":
-            return self._handle_immediate(error_event, context_window)
+            result = self._handle_immediate(error_event, context_window)
         else:
-            return self._handle_threshold(error_event, context_window)
+            result = self._handle_threshold(error_event, context_window)
+
+        # Updated only after cascade detection has compared error_event
+        # against the *previous* last_error. Setting this earlier (as it
+        # used to be) made every event its own "last_error" before the
+        # comparison ran, so the != check could never be true and no
+        # cascade was ever confirmed, in any iteration, until this fix.
+        self.last_error = error_event
+        return result
 
     def get_stats(self) -> dict:
         """Current detector stats — feeds into dashboard in Week 3."""
