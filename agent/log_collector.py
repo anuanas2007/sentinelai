@@ -157,5 +157,7 @@ def watch_log_file(log_path: str):
 
 
 if __name__ == "__main__":
-    LOG_PATH = "logs/app.log"
+    # LOG_PATH env var lets docker-compose point this at the shared
+    # volume mount without changing the local dev default.
+    LOG_PATH = os.environ.get("LOG_PATH", "logs/app.log")
     watch_log_file(LOG_PATH)

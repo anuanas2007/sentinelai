@@ -2,7 +2,7 @@ import sys
 import os
 import structlog
 
-def setup_logger(log_path: str = "../logs/app.log"):
+def setup_logger(log_path: str = None):
     """
     Sets up structlog to write to both stdout and a log file.
     
@@ -14,6 +14,11 @@ def setup_logger(log_path: str = "../logs/app.log"):
     Mixing infrastructure setup with business logic violates
     the single responsibility principle.
     """
+    # LOG_PATH env var lets docker-compose point this at a shared volume
+    # without changing the local dev default (run from target_app/).
+    if log_path is None:
+        log_path = os.environ.get("LOG_PATH", "../logs/app.log")
+
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     
     log_file = open(log_path, "a", buffering=1)

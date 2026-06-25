@@ -1,0 +1,22 @@
+services:
+  target-app:
+    build: ./target_app
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_PATH=/app/logs/app.log
+    volumes:
+      - log-data:/app/logs
+
+  sentinel-agent:
+    build: ./agent
+    depends_on:
+      - target-app
+    environment:
+      - LOG_PATH=/app/logs/app.log
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - log-data:/app/logs:ro
+
+volumes:
+  log-data:
