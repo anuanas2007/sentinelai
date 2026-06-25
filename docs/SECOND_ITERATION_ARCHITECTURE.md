@@ -50,6 +50,8 @@ Week 1 proved the core logic works. Docker adds reproducibility and proper isola
 **Why `LOG_PATH` as an env var instead of hardcoding the container path?**
 `target_app/logger.py` and `agent/log_collector.py` both defaulted to host-relative paths (`../logs/app.log` and `logs/app.log`) written for Week 1's "two processes on one machine" setup. Hardcoding the new container path (`/app/logs/app.log`) into the code would have broken local, non-Docker development. Reading the path from an env var with the Week 1 default as fallback means both workflows — bare `uvicorn`/`python` for fast local iteration, and `docker-compose up` for the real containerised run — work unmodified.
 
+**Bug discovered during testing:** `sentinel-agent`'s incident alerts (`print()` statements in `log_collector.py`) never appeared in `docker compose logs`, even though the container was running and the log file was being written and read correctly. Cause: Python buffers stdout in fixed-size blocks when it isn't attached to a TTY — which is always true inside a container. The output wasn't lost, just sitting in a buffer that hadn't filled yet. Fixed by setting `PYTHONUNBUFFERED=1` on the `sentinel-agent` service. This is the same category of bug as the Week 1 structlog field-name mismatch — invisible until two systems are actually wired together and observed running, not something a unit test would catch.
+
 ---
 
 *(Postgres, Redis, traffic simulator, and AI reasoning engine sections to be added as each is built.)*
