@@ -3,6 +3,7 @@ import time
 import os
 from collections import deque
 from typing import Optional
+from error_detector import ErrorDetector, Incident
 
 # ============================================================
 # RING BUFFER
@@ -12,6 +13,9 @@ from typing import Optional
 # ============================================================
 LOG_BUFFER_SIZE = 100
 log_buffer: deque = deque(maxlen=LOG_BUFFER_SIZE)
+
+# Single detector instance — stateful, lives for the lifetime of the collector
+detector = ErrorDetector()
 
 
 def parse_log_line(line: str) -> Optional[dict]:
@@ -54,39 +58,55 @@ def get_buffer_context() -> list:
 
 def handle_error(error_entry: dict):
     """
-    Called immediately when an error is detected in the log stream.
-
-    Right now this just prints a clear alert with context.
-    In Week 2 this is where the AI reasoning engine plugs in —
-    it receives this error + the ring buffer context and reasons
-    about root cause.
+    Called by log collector when is_error() = True.
+    Passes error to detector — detector decides if it's an incident.
     """
-    print("\n" + "=" * 60)
-    print("🚨 [SentinelAI] ERROR DETECTED")
-    print("=" * 60)
-    print(f"  Event     : {error_entry.get('event', 'unknown')}")
-    print(f"  Level     : {error_entry.get('level', 'unknown')}")
-    print(f"  Timestamp : {error_entry.get('timestamp', 'unknown')}")
-
-    # Print all extra context fields
-    skip_fields = {"event", "level", "timestamp", "_raw"}
-    for key, value in error_entry.items():
-        if key not in skip_fields:
-            print(f"  {key:<10}: {value}")
-
-    # Show what happened just before the error
     context = get_buffer_context()
-    recent = context[-10:]  # last 10 lines for readability
-    print(f"\n📋 Context — last {len(recent)} log lines before error:")
+    incident = detector.process_error(error_entry, context)
+
+    if incident is None:
+        # Below threshold — noise, ignore
+        return
+
+    # Print incident alert
+    severity_emoji = "🚨" if incident.severity in ("immediate", "critical") else "⚠️"
+
+    print("\n" + "=" * 60)
+    print(f"{severity_emoji} [SentinelAI] {incident.severity.upper()} INCIDENT")
+    print("=" * 60)
+    print(f"  Event      : {incident.trigger_event.event}")
+    print(f"  Class      : {incident.trigger_event.error_class}")
+    print(f"  Severity   : {incident.severity}")
+    print(f"  Errors/60s : {incident.error_count}")
+
+    if incident.pattern:
+        print(f"  Cascade    : {incident.pattern}")
+
+    if incident.requires_ai:
+        print(f"\n  🤖 AI reasoning engine will be invoked here in Week 2")
+
+    # Show context
+    recent = incident.context_window[-10:]
+    print(f"\n📋 Context — last {len(recent)} log lines:")
     print("-" * 60)
     for entry in recent:
         level = entry.get("level", "info").upper()
         event = entry.get("event", "")
-        timestamp = entry.get("timestamp", "")[:19]  # trim microseconds
+        timestamp = entry.get("timestamp", "")[:19]
         print(f"  [{level:<8}] {timestamp} — {event}")
 
+    # Show detector stats
+    stats = detector.get_stats()
+    print(f"\n📊 Detector stats:")
+    print(f"  Total incidents : {stats['total_incidents']}")
+    print(f"  Immediate       : {stats['immediate_incidents']}")
+    print(f"  Threshold       : {stats['threshold_incidents']}")
+    print(f"  Errors in window: {stats['errors_in_window']}")
+
+    if stats['confirmed_cascades']:
+        print(f"  Confirmed cascades: {stats['confirmed_cascades']}")
+
     print("=" * 60 + "\n")
-    print("[SentinelAI] Waiting for next event...\n")
 
 
 def watch_log_file(log_path: str):
