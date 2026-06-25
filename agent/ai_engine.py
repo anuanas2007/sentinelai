@@ -1,3 +1,21 @@
+"""
+AI reasoning engine — invoked by log_collector.py's background worker
+thread, never from the main log-watching loop, for incidents whose
+requires_ai flag is True (see AI_WORTHY_EVENTS in error_detector.py).
+
+Three CrewAI agents run sequentially, each receiving the previous
+agent's output as context:
+
+  retrieval_agent   -> lists and reads the actual target_app source
+                       (list_source_files, then read_source_file)
+  hypothesis_agent  -> root cause + confidence, grounded only in what
+                       retrieval_agent actually retrieved
+  fix_agent         -> a proposed diff + explanation for human review;
+                       never applies anything itself
+
+analyze_incident() kicks off the crew and returns the fix agent's
+output as plain text — that's the only thing the caller sees.
+"""
 import os
 from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
