@@ -259,4 +259,30 @@ First real run: 50 workers, 30 seconds, weighted toward `/users/{id}`, `/orders`
 
 **Decision: documented as still-theoretical at this query speed/pool size, not artificially forced.** The simulator's actual goal — proving real concurrency produces real, unscripted failures rather than every failure mode being hand-triggered — is already demonstrated by `negative_balance_detected` firing organically. Forcing `db_pool_exhausted` to reproduce (e.g. via an artificial query delay) would be the same hollow-feature pattern this project has repeatedly pushed back on elsewhere. Revisit only if a future feature naturally introduces slower queries (e.g. the deferred `target_app` complexity expansion).
 
-*(Redis section to be added if/when built.)*
+---
+
+## 5. Redis — 24-Hour Incident History
+
+**Goal:** answer long-horizon pattern questions ("has this happened before today," "how many times this week") that the in-memory sliding window in `error_detector.py` can't — it forgets everything after `WINDOW_SECONDS=60`. Not yet wired into the AI engine's context; validated standalone first, per this project's usual one-piece-at-a-time sequencing (same reasoning as Docker-before-Postgres, Postgres-before-the-AI-engine).
+
+### Originally proposed combined with git-based retrieval; deliberately un-bundled
+
+The idea to feed the AI engine both real git history *and* broader Redis-sourced log history together is a good eventual picture, but building both at once would mean if something went wrong, there'd be no way to tell which piece caused it. Git-based retrieval was separately deferred to the final iteration (see below) — its value depends on genuine multi-author commit history, which `target_app` doesn't have since its entire history is us building it incrementally this week. Real companies grant this kind of access via API-scoped GitHub/GitLab tokens correlating deploys with incidents, not raw `.git` filesystem mounting — reinforcing that this is better revisited once there's an actual separate repo to point at (the same final-iteration plan as validating against a real external app), not solved as a monorepo workaround now.
+
+### Incidents only, not raw log lines
+
+Same "filter down to high-signal data" philosophy this whole pipeline already uses. The ring buffer/sliding window already handle short-window, real-time detection in memory; Redis's only job is the long horizon nothing else covers. Storing every raw log line for 24h was considered and rejected — the traffic simulator alone produces 30,000+ lines per 30-second burst, which would mean storing hundreds of thousands of lines per day for uncertain payoff. Confirmed `Incident` objects (already filtered by the two-mode classifier) stay small and tractable even under heavy load.
+
+### Native TTL + sorted-set index, not a cleanup job
+
+Each incident gets its own key with a 24h TTL (`SETEX`) — Redis expires it automatically, no background cleanup process needed. A per-event-type sorted set (`ZADD`, timestamp as score) indexes incidents for efficient time-range queries (`ZRANGEBYSCORE`/`ZCOUNT`); since sorted-set members don't expire on their own the way `SETEX` keys do, the index is trimmed (`ZREMRANGEBYSCORE`) on every write to stay in sync. This is a standard, idiomatic Redis pattern — the same primitives used for rate limiters and "recent activity" feeds, not a stretch or misuse of what Redis is "supposed to be for."
+
+**Deliberately scoped to long-horizon queries only, not short windows.** A "how many in the last 5 minutes" query is mechanically just as easy with this same sorted set, but it would duplicate `error_detector.py`'s existing in-memory sliding window for no new capability — kept the line clear: Redis answers "today/this week," the in-memory window answers "right now."
+
+### Failure isolation
+
+Writing to Redis is wrapped in its own `try/except` in `handle_error()` — if Redis is ever unavailable, real-time detection and alerting keep working exactly as before; only the long-horizon history silently stops accumulating. Redis is additive infrastructure, not a dependency the core pipeline should ever be blocked by.
+
+### Verified standalone
+
+Triggered real incidents, confirmed via `redis-cli` directly: the key exists with the correct JSON record, TTL is ~86375s (correctly close to the full 24h), and the sorted-set index has the matching entry. Confirmed `count_in_window()` returns the correct count against real data, and returns 0 for an impossibly short window — basic sanity check that the time math is right. Not yet connected to `ai_engine.py`'s context; that's the explicit next step once this and (deferred) git-based retrieval would both exist, per the sequencing decision above.
