@@ -259,4 +259,40 @@ First real run: 50 workers, 30 seconds, weighted toward `/users/{id}`, `/orders`
 
 **Decision: documented as still-theoretical at this query speed/pool size, not artificially forced.** The simulator's actual goal — proving real concurrency produces real, unscripted failures rather than every failure mode being hand-triggered — is already demonstrated by `negative_balance_detected` firing organically. Forcing `db_pool_exhausted` to reproduce (e.g. via an artificial query delay) would be the same hollow-feature pattern this project has repeatedly pushed back on elsewhere. Revisit only if a future feature naturally introduces slower queries (e.g. the deferred `target_app` complexity expansion).
 
-*(Redis section to be added if/when built.)*
+---
+
+## 5. Redis — 24-Hour Incident History
+
+**Goal:** answer long-horizon pattern questions ("has this happened before today," "how many times this week") that the in-memory sliding window in `error_detector.py` can't — it forgets everything after `WINDOW_SECONDS=60`. Not yet wired into the AI engine's context; validated standalone first, per this project's usual one-piece-at-a-time sequencing (same reasoning as Docker-before-Postgres, Postgres-before-the-AI-engine).
+
+### Originally proposed combined with git-based retrieval; deliberately un-bundled
+
+The idea to feed the AI engine both real git history *and* broader Redis-sourced log history together is a good eventual picture, but building both at once would mean if something went wrong, there'd be no way to tell which piece caused it. Git-based retrieval was separately deferred to the final iteration (see below) — its value depends on genuine multi-author commit history, which `target_app` doesn't have since its entire history is us building it incrementally this week. Real companies grant this kind of access via API-scoped GitHub/GitLab tokens correlating deploys with incidents, not raw `.git` filesystem mounting — reinforcing that this is better revisited once there's an actual separate repo to point at (the same final-iteration plan as validating against a real external app), not solved as a monorepo workaround now.
+
+### Incidents only, not raw log lines
+
+Same "filter down to high-signal data" philosophy this whole pipeline already uses. The ring buffer/sliding window already handle short-window, real-time detection in memory; Redis's only job is the long horizon nothing else covers. Storing every raw log line for 24h was considered and rejected — the traffic simulator alone produces 30,000+ lines per 30-second burst, which would mean storing hundreds of thousands of lines per day for uncertain payoff. Confirmed `Incident` objects (already filtered by the two-mode classifier) stay small and tractable even under heavy load.
+
+### Native TTL + sorted-set index, not a cleanup job
+
+Each incident gets its own key with a 24h TTL (`SETEX`) — Redis expires it automatically, no background cleanup process needed. A per-event-type sorted set (`ZADD`, timestamp as score) indexes incidents for efficient time-range queries (`ZRANGEBYSCORE`/`ZCOUNT`); since sorted-set members don't expire on their own the way `SETEX` keys do, the index is trimmed (`ZREMRANGEBYSCORE`) on every write to stay in sync. This is a standard, idiomatic Redis pattern — the same primitives used for rate limiters and "recent activity" feeds, not a stretch or misuse of what Redis is "supposed to be for."
+
+**Deliberately scoped to long-horizon queries only, not short windows.** A "how many in the last 5 minutes" query is mechanically just as easy with this same sorted set, but it would duplicate `error_detector.py`'s existing in-memory sliding window for no new capability — kept the line clear: Redis answers "today/this week," the in-memory window answers "right now."
+
+### Failure isolation
+
+Writing to Redis is wrapped in its own `try/except` in `handle_error()` — if Redis is ever unavailable, real-time detection and alerting keep working exactly as before; only the long-horizon history silently stops accumulating. Redis is additive infrastructure, not a dependency the core pipeline should ever be blocked by.
+
+### Verified standalone
+
+Triggered real incidents, confirmed via `redis-cli` directly: the key exists with the correct JSON record, TTL is ~86375s (correctly close to the full 24h), and the sorted-set index has the matching entry. Confirmed `count_in_window()` returns the correct count against real data, and returns 0 for an impossibly short window — basic sanity check that the time math is right.
+
+### Connected to the AI engine as a tool, not injected context
+
+Originally planned to inject frequency data ("this occurred N times in the last 24h") into every AI-worthy incident's prompt unconditionally, the same way `APP_CONTEXT` works. Reconsidered after a direct suggestion: give the investigator a **tool** (`get_incident_history`) instead, exactly like `list_source_files`/`read_source_file` — let the model decide *when* asking about frequency would actually help, rather than force-feeding it into every prompt regardless of relevance. More consistent with how the investigator already works, and avoids prompt bloat for incidents where recurrence doesn't end up mattering.
+
+Worth being precise about why this is safe and doesn't repeat the earlier hand-holding mistake (the removed `negative_balance_detected` architecture hint): frequency data is **objective fact** ("this happened 3 times"), not a **conclusion** about *why* — the model still has to do its own reasoning about what the frequency means. Giving it real data to reason over is the right kind of context; giving it our own conclusion is not. The tool takes an optional `hours` parameter (default 24, the maximum retained) rather than being hardcoded, so the model can ask about a shorter window if relevant too.
+
+**A real architectural question surfaced while building this, worth recording:** does Redis replace the in-memory sliding window (`error_detector.py`'s `WINDOW_SECONDS=60`)? No — they're different layers. The in-memory window *is* the real-time detector: it decides, synchronously and in-process, whether a threshold-class error should escalate to a confirmed incident, on every single log line. Redis only stores incidents *after* that decision is already made — it never participates in detection itself, only in retrospective queries the AI engine makes optionally. Collapsing them would mean every log line needs a network round-trip just to decide whether to escalate, and would make core real-time detection depend on Redis being up — directly contradicting the failure-isolation design (`handle_error()`'s Redis write is already wrapped in its own `try/except` specifically so Redis going down never breaks real-time alerting).
+
+**Verified:** rebuilt, triggered `analytics_failed` to its critical threshold, confirmed the investigator correctly chose *not* to call the new tool (confidence was already 1.0 from the code alone — correct judgment that frequency data wouldn't add anything for a fully deterministic bug). Directly tested the tool itself independent of whether the model uses it: correct counts for both the default 24h window and a custom 1h window, correct 0 for an event that hasn't fired.

@@ -26,8 +26,10 @@ analyze_incident() kicks off the crew and returns the fix agent's
 output as plain text — that's the only thing the caller sees.
 """
 import os
+from pydantic import BaseModel, Field
 from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
+import redis_store
 
 # Mounted read-only into the container — toy-scale simplification.
 # See docs/SECOND_ITERATION_ARCHITECTURE.md for why this doesn't scale
@@ -76,6 +78,31 @@ class ReadSourceFileTool(BaseTool):
             return f.read()
 
 
+class _IncidentHistoryArgs(BaseModel):
+    event_name: str = Field(..., description="Exact event name, e.g. 'negative_balance_detected'")
+    hours: float = Field(24, description="How many hours back to look. Defaults to 24 (the max -- incidents older than 24h are not retained).")
+
+
+class GetIncidentHistoryTool(BaseTool):
+    name: str = "get_incident_history"
+    description: str = (
+        "Returns how many times this exact event type has occurred as a "
+        "confirmed incident in the given time window (default 24 hours, "
+        "the maximum retained), including this one. Call this only if "
+        "knowing whether this is a one-off or a recurring pattern would "
+        "actually help your diagnosis -- this is factual frequency data, "
+        "not a hint about the cause."
+    )
+    args_schema: type[BaseModel] = _IncidentHistoryArgs
+
+    def _run(self, event_name: str, hours: float = 24) -> str:
+        try:
+            count = redis_store.count_in_window(event_name, hours=hours)
+        except Exception as e:
+            return f"Could not retrieve incident history: {e}"
+        return f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
+
+
 def _stage_callback(stage_label: str):
     """
     Prints a clean, labeled block to stdout when a task finishes --
@@ -107,7 +134,7 @@ def _build_crew(incident_summary: str) -> Crew:
             "honestly; if the evidence is ambiguous, say so rather than "
             "overclaiming."
         ),
-        tools=[ListSourceFilesTool(), ReadSourceFileTool()],
+        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool()],
         llm=LLM_MODEL,
         verbose=False,
     )

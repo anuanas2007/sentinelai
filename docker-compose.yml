@@ -27,15 +27,27 @@ services:
     volumes:
       - log-data:/app/logs
 
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
   sentinel-agent:
     build: ./agent
     depends_on:
-      - target-app
+      target-app:
+        condition: service_started
+      redis:
+        condition: service_healthy
     environment:
       - LOG_PATH=/app/logs/app.log
       - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - TARGET_APP_SRC=/app/target_app_src
+      - REDIS_URL=redis://redis:6379
     volumes:
       - log-data:/app/logs:ro
       # Read-only access to the app's source for the retrieval agent.

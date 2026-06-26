@@ -7,6 +7,7 @@ from collections import deque
 from typing import Optional
 from error_detector import ErrorDetector, Incident
 import ai_engine
+import redis_store
 
 # ============================================================
 # RING BUFFER
@@ -168,6 +169,13 @@ def handle_error(error_entry: dict):
     if incident is None:
         # Below threshold — noise, ignore
         return
+
+    try:
+        redis_store.write_incident(incident)
+    except Exception as e:
+        # Redis is for long-horizon pattern queries, not core detection --
+        # losing it shouldn't take down real-time alerting on top of it.
+        print(f"⚠️  [SentinelAI] Failed to write incident to Redis: {e}")
 
     # Print incident alert
     severity_emoji = "🚨" if incident.severity in ("immediate", "critical") else "⚠️"
