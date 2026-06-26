@@ -21,7 +21,10 @@ def setup_logger(log_path: str = None) -> None:
 
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-    log_file = open(log_path, "a", buffering=1)
+    # "w" not "a" -- truncate on every fresh startup. app.log has no size
+    # cap and no rotation; without this it grows forever across restarts
+    # and especially traffic-simulator runs (33k+ lines in one 30s burst).
+    log_file = open(log_path, "w", buffering=1)
 
     class MultiWriter:
         def write(self, msg):

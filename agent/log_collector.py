@@ -244,7 +244,18 @@ def watch_log_file(log_path: str):
             raw_line = f.readline()
 
             if not raw_line:
-                # No new line yet — wait a bit and try again
+                # target_app now truncates app.log on every fresh startup
+                # (see logger.py) instead of appending forever. If it
+                # restarted while we kept running, our read position is
+                # now past the truncated file's actual size -- without
+                # this check we'd sit stuck forever, never seeing
+                # anything the restarted app writes. Re-seek to the
+                # start when that happens.
+                try:
+                    if os.path.getsize(log_path) < f.tell():
+                        f.seek(0)
+                except OSError:
+                    pass
                 time.sleep(0.1)
                 continue
 

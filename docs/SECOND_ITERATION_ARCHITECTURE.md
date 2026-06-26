@@ -224,4 +224,39 @@ Fixed both issues: `EVENT_SPECIFIC_CONTEXT` now selects only the hint matching t
 
 **Verified both fixes hold:** re-triggered `unhandled_exception` — correctly identified the exact endpoint and function this time, confidence 1.0. Re-triggered `negative_balance_detected` with its hint completely removed — found the race condition unaided anyway, confidence 0.95, by reading an actual code comment in `db.py` (not anything from the prompt) describing the intentional race. Confirms the hint was never load-bearing for diagnosis quality — only for occasionally drifting into hand-holding territory.
 
-*(Redis and the traffic simulator sections to be added as each is built.)*
+---
+
+## 4. Traffic Simulator
+
+**Goal:** generate genuine concurrent load against `target_app` to produce *emergent* failures (real pool contention, real race conditions) instead of hand-coded ones — directly addressing an earlier honest critique: most of this project's failure modes either are deterministic business-rule checks or were hand-triggered one request at a time. The only previously-organic exception was `negative_balance_detected`, manually fired via two concurrent `curl` calls.
+
+### Deliberate stress generator, not realistic traffic
+
+Two genuinely different designs were on the table: realistic everyday traffic (modest rate, mostly valid requests) vs. a deliberate stress/contention generator (concurrent bursts targeting the same resources). Chose the latter — at this app's scale (3 users, a 5-connection pool), realistic-rate traffic would almost never create real contention. The whole point was making `db_pool_exhausted` and similar contention bugs finally reproducible, which only deliberate stress achieves.
+
+### Sustained pressure, not a burst — the actual lesson from the earlier manual attempt
+
+An earlier manual test fired 300 `curl` requests at once and got all `200`s — single-row indexed queries finish in microseconds, so even 300 requests cycle through a 5-connection pool faster than the pool's acquire timeout could ever be hit. The fix isn't more requests in one burst, it's *sustained* concurrent pressure over time. `traffic_simulator/simulate.py` runs a configurable number of independent workers (default 50), each looping continuously — fire a request, immediately fire the next — for a configurable duration (default 30s), rather than firing a fixed batch and stopping.
+
+### Plain Python + `httpx`/`asyncio`, not Locust/k6
+
+Same reasoning as `asyncpg`-over-ORM and hand-rolled-vs-CrewAI earlier in this doc: a load-testing tool like Locust is something you configure, not something you engineered — weaker to explain in an interview than "I wrote a concurrency generator using `asyncio.gather`." Also avoids a new runtime dependency; `httpx` is already used elsewhere in this project.
+
+### Docker-compose profile, not a service that starts automatically
+
+`docker compose up` must keep working exactly as before — starting the simulator automatically would mean constant background load every time you just want to poke at one endpoint manually. Added as a 4th service gated behind `profiles: ["stress"]`, so it's containerized (same Docker network, reaches `target-app` by service name) but strictly opt-in: `docker compose --profile stress up traffic-simulator` runs it on demand.
+
+### Result: real wins, one honest gap
+
+First real run: 50 workers, 30 seconds, weighted toward `/users/{id}`, `/orders`, `/analytics` (the pool-touching endpoints) — **33,589 requests in 30 seconds.**
+
+**Genuine organic failures, for the first time without manual engineering:**
+- `negative_balance_detected` fired **twice**, purely from real concurrent traffic — the race condition emerged on its own this time, not from a deliberately-timed pair of `curl` calls.
+- `analytics_failed` fired at real volume (1,733 times) under genuine sustained load.
+- `target-app` survived the entire run without crashing or restarting.
+
+**The gap: `db_pool_exhausted` still didn't fire**, even under this much heavier load. Traced why: `item_a`/`item_c`'s small seeded stock depleted almost immediately, so most of the 30 seconds was spent on fast, no-write `insufficient_stock` rejections rather than sustained writes — but even the ~17,000 sustained *read* requests (`get_user`/`analytics`, which always touch the pool regardless of stock) weren't enough, implying single-row indexed queries are simply too fast relative to the 3-second acquire timeout to exhaust a 5-connection pool through query volume alone, even at ~570 req/s sustained. The 5,358 `ConnectError`s the simulator's own client saw appear to be network/Uvicorn-level saturation (no tracebacks, no pool-related log lines, no crash) — a different bottleneck than the actual `asyncpg` pool.
+
+**Decision: documented as still-theoretical at this query speed/pool size, not artificially forced.** The simulator's actual goal — proving real concurrency produces real, unscripted failures rather than every failure mode being hand-triggered — is already demonstrated by `negative_balance_detected` firing organically. Forcing `db_pool_exhausted` to reproduce (e.g. via an artificial query delay) would be the same hollow-feature pattern this project has repeatedly pushed back on elsewhere. Revisit only if a future feature naturally introduces slower queries (e.g. the deferred `target_app` complexity expansion).
+
+*(Redis section to be added if/when built.)*

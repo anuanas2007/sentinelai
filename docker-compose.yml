@@ -43,6 +43,16 @@ services:
       # for why this doesn't scale and the planned git-based follow-up.
       - ./target_app:/app/target_app_src:ro
 
+  traffic-simulator:
+    build: ./traffic_simulator
+    profiles: ["stress"]  # never starts with plain `docker compose up`
+    depends_on:
+      - target-app
+    environment:
+      - TARGET_BASE_URL=http://target-app:8000
+      - WORKERS=50
+      - DURATION_SECONDS=30
+
 volumes:
   log-data:
   postgres-data:
