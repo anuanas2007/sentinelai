@@ -29,6 +29,7 @@ IMMEDIATE_ERRORS = {
     "order_failed_insufficient_balance",
     "order_failed_fk_violation",
     "negative_balance_detected",
+    "unhandled_exception",
 }
 
 THRESHOLD_ERRORS = {
@@ -67,6 +68,12 @@ THRESHOLD_ERRORS = {
 #     "investigate httpbin's internals" (impossible) -- it's "investigate
 #     whether our own usage/defensive coding is adequate" (discoverable
 #     by reading main.py).
+#   - unhandled_exception: by definition, nobody anticipated this one --
+#     there's no pre-written business-rule check or known failure mode.
+#     The log shows exception type/message (what), almost never why.
+#     This is the most genuinely organic AI-worthy case of all: every
+#     other entry here was deliberately engineered or at least expected
+#     to occur; this is whatever actually breaks that nobody thought of.
 # A confirmed cascade is also AI-worthy regardless of which events
 # it involves — "is this real causation or coincidence" is itself a
 # genuine hypothesis question, not something the detector can answer.
@@ -76,6 +83,7 @@ AI_WORTHY_EVENTS = {
     "analytics_failed",
     "external_api_timeout",
     "external_api_error",
+    "unhandled_exception",
 }
 
 # Thresholds for probabilistic errors

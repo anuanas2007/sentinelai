@@ -2,7 +2,8 @@ import random
 import structlog
 import httpx
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from datetime import datetime
 from logger import setup_logger
@@ -26,6 +27,24 @@ app = FastAPI(
     description="A realistic app that SentinelAI monitors",
     lifespan=lifespan,
 )
+
+@app.exception_handler(Exception)
+async def catch_all_exceptions(request: Request, exc: Exception):
+    """
+    Safety net for exceptions nobody anticipated. Starlette only falls
+    back to this when no more specific handler matches (HTTPException
+    has its own, already-registered handler) -- so every deliberate
+    `raise HTTPException(...)` in this file keeps working exactly as
+    before. This exists because /external previously crashed with a
+    completely unlogged 500 (a JSONDecodeError no one wrote a specific
+    except clause for) -- invisible to the whole monitoring pipeline.
+    Patching that one endpoint after finding it doesn't scale; this
+    guarantees the *next* unanticipated exception, anywhere, is logged.
+    """
+    log.error("unhandled_exception",
+              error=str(exc), error_type=type(exc).__name__, path=str(request.url))
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 
 ITEM_PRICE = 50.0
 

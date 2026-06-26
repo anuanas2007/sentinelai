@@ -45,7 +45,15 @@ APP_CONTEXT = (
     "visibility into the third party itself -- focus on whether OUR "
     "code's timeout value, status-code handling, and response parsing "
     "are appropriate for what it's actually calling, rather than "
-    "speculating about the third party's internals."
+    "speculating about the third party's internals. main.py also has a "
+    "catch_all_exceptions handler registered for any exception no more "
+    "specific handler caught. If you're investigating an "
+    "unhandled_exception incident, there's no pre-existing knowledge of "
+    "what this is -- use the event's error_type/error/path fields (in "
+    "the event context below) to find the actual endpoint function "
+    "handling that path, read it, and trace what could realistically "
+    "raise that specific exception type there. Don't guess generically; "
+    "find the actual line."
 )
 
 

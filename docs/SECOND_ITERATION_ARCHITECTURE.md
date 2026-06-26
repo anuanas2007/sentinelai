@@ -206,4 +206,12 @@ Added both events to `AI_WORTHY_EVENTS`, and extended `APP_CONTEXT` to point the
 
 General lesson: "is the log line self-explanatory" isn't really the right test for AI-worthiness on its own — better test is "does *our own code* contain a discoverable insight beyond the proximate symptom," even when the ultimate external cause is unknowable. db_pool_exhausted/db_deadlock/db_connection_error remain excluded specifically because no comparable code-level insight exists *yet* (no hold-time instrumentation) — not because the question itself is unanswerable in principle.
 
+### A global exception handler, because patching one endpoint at a time doesn't scale
+
+The `/external` fix earlier in this doc patched one specific, already-discovered gap. The same *class* of bug — an exception nobody anticipated, falling through with no structured logging at all — could exist in any endpoint we haven't happened to break yet. Manually wrapping every endpoint in `try/except` only catches failure modes we already thought of, which is exactly the losing game described above.
+
+Added `target_app/main.py`'s `catch_all_exceptions`, registered via `@app.exception_handler(Exception)`. Starlette only falls back to this when no more specific handler matches, so every existing `raise HTTPException(...)` and FastAPI's own request-validation handling keep working untouched — this only catches what nothing else caught. Logs a new `unhandled_exception` event with `error`, `error_type`, and `path`, classified `immediate` (consistent with "unknown errors default to immediate, over-alert is safer than missing one") and added to `AI_WORTHY_EVENTS` — arguably the most genuinely organic AI-worthy case of all, since by definition nothing pre-diagnosed it the way every other entry in that set was deliberately engineered or anticipated.
+
+Verified with a temporary test endpoint (`return 1/0`, removed after verifying): confirmed the structured log line fires correctly (`error_type: ZeroDivisionError`, real path, real message), `sentinel-agent` detects and classifies it correctly as an immediate incident, and it gets queued for AI. The actual AI call failed in this test run due to an invalid OpenAI key (unrelated account issue, not a bug in this mechanism) — everything up to and including the AI hand-off was confirmed working.
+
 *(Redis and the traffic simulator sections to be added as each is built.)*
