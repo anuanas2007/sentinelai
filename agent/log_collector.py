@@ -29,29 +29,53 @@ detector = ErrorDetector()
 ai_queue: "queue.Queue[Incident]" = queue.Queue()
 
 
-APP_CONTEXT = (
+BASE_APP_CONTEXT = (
     "The monitored app is a FastAPI service (target_app/main.py) backed by "
     "Postgres (target_app/db.py). It has users (id, name, email, balance) "
-    "and items (name, stock); creating an order deducts both. main.py's "
-    "create_order reads current balance/stock (via db.get_user/db.get_item), "
-    "checks them in Python, then separately calls db.apply_order to write "
-    "the deduction. If you're investigating a balance/stock anomaly, check "
-    "whether that read-then-write sequence holds up under concurrent "
-    "requests -- don't assume it's safe just because each step looks "
-    "correct in isolation. main.py also has a call_external() function "
-    "that calls a third-party HTTP endpoint with a fixed client timeout "
-    "and parses the response as JSON. If you're investigating an "
-    "external_api_timeout/external_api_error incident, you have no "
-    "visibility into the third party itself -- focus on whether OUR "
-    "code's timeout value, status-code handling, and response parsing "
-    "are appropriate for what it's actually calling, rather than "
-    "speculating about the third party's internals."
+    "and items (name, stock); creating an order deducts both. Investigate "
+    "by actually reading the relevant code -- don't assume an operation "
+    "is safe just because each step looks correct in isolation, and don't "
+    "default to a conclusion from a different incident you've seen "
+    "before just because it's familiar."
 )
+
+# Per-event methodology hints -- general investigation technique only,
+# never the architecture or the answer. A hint like "create_order reads
+# balance then separately calls db.apply_order, check for races" isn't
+# investigation guidance, it's handing over the conclusion -- that
+# defeats the point of having an investigator agent. negative_balance_detected
+# deliberately has NO hint here for that reason: it should be findable
+# (or not) through the investigator's own code-reading, same as a real
+# unknown bug would have to be. unhandled_exception and external_api_*
+# get general, transferable technique hints that would apply to any app,
+# not facts specific to this one.
+EVENT_SPECIFIC_CONTEXT = {
+    "unhandled_exception": (
+        "There's no pre-existing knowledge of what this specific crash "
+        "is. The event context below has a path field -- match it to "
+        "the exact route decorator (e.g. @app.get(\"<path>\")) in the "
+        "code, not just any function that happens to raise the same "
+        "exception type elsewhere."
+    ),
+    "external_api_timeout": (
+        "This involves a call to a third-party HTTP endpoint. You have "
+        "no visibility into the third party itself -- focus on whether "
+        "OUR code's own usage (timeout value, status-code handling, "
+        "response parsing) is appropriate for what it's calling, rather "
+        "than speculating about the third party's internals."
+    ),
+}
+EVENT_SPECIFIC_CONTEXT["external_api_error"] = EVENT_SPECIFIC_CONTEXT["external_api_timeout"]
 
 
 def _build_incident_summary(incident: Incident) -> str:
+    event_name = incident.trigger_event.event
+    app_context = BASE_APP_CONTEXT
+    if event_name in EVENT_SPECIFIC_CONTEXT:
+        app_context += " " + EVENT_SPECIFIC_CONTEXT[event_name]
+
     lines = [
-        APP_CONTEXT,
+        app_context,
         "",
         f"Event: {incident.trigger_event.event}",
         f"Severity: {incident.severity}",

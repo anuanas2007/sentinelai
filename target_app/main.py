@@ -1,8 +1,10 @@
 import random
+from typing import NoReturn
 import structlog
 import httpx
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from datetime import datetime
 from logger import setup_logger
@@ -12,6 +14,8 @@ import db
 setup_logger()
 
 log = structlog.get_logger()
+
+ITEM_PRICE = 50.0
 
 
 @asynccontextmanager
@@ -27,7 +31,38 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-ITEM_PRICE = 50.0
+
+@app.exception_handler(Exception)
+async def catch_all_exceptions(request: Request, exc: Exception):
+    """
+    Safety net for exceptions nobody anticipated. Starlette only falls
+    back to this when no more specific handler matches (HTTPException
+    has its own, already-registered handler) -- so every deliberate
+    `raise HTTPException(...)` in this file keeps working exactly as
+    before. This exists because /external previously crashed with a
+    completely unlogged 500 (a JSONDecodeError no one wrote a specific
+    except clause for) -- invisible to the whole monitoring pipeline.
+    Patching that one endpoint after finding it doesn't scale; this
+    guarantees the *next* unanticipated exception, anywhere, is logged.
+    """
+    log.error("unhandled_exception",
+              error=str(exc), error_type=type(exc).__name__, path=str(request.url))
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+
+def _handle_db_exception(e: Exception, **log_context) -> NoReturn:
+    """
+    Translates db.py's typed pool/connection exceptions into the matching
+    structured log event + HTTPException, in one place instead of the
+    same four-line block repeated at every call site that touches the DB.
+    """
+    if isinstance(e, db.DBPoolExhausted):
+        log.error("db_pool_exhausted", error=str(e), **log_context)
+        raise HTTPException(status_code=503, detail="Database pool exhausted")
+    if isinstance(e, db.DBConnectionError):
+        log.error("db_connection_error", error=str(e), **log_context)
+        raise HTTPException(status_code=503, detail="Database connection error")
+    raise e
 
 
 class OrderRequest(BaseModel):
@@ -47,12 +82,8 @@ async def get_user(user_id: int):
 
     try:
         user = await db.get_user(user_id)
-    except db.DBPoolExhausted as e:
-        log.error("db_pool_exhausted", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=503, detail="Database pool exhausted")
-    except db.DBConnectionError as e:
-        log.error("db_connection_error", user_id=user_id, error=str(e))
-        raise HTTPException(status_code=503, detail="Database connection error")
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e, user_id=user_id)
 
     if not user:
         log.error("user_not_found", user_id=user_id, error="User does not exist")
@@ -69,12 +100,8 @@ async def create_order(order: OrderRequest):
     try:
         user = await db.get_user(order.user_id)
         item = await db.get_item(order.item)
-    except db.DBPoolExhausted as e:
-        log.error("db_pool_exhausted", user_id=order.user_id, error=str(e))
-        raise HTTPException(status_code=503, detail="Database pool exhausted")
-    except db.DBConnectionError as e:
-        log.error("db_connection_error", user_id=order.user_id, error=str(e))
-        raise HTTPException(status_code=503, detail="Database connection error")
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e, user_id=order.user_id)
 
     # Check user exists
     if not user:
@@ -111,12 +138,8 @@ async def create_order(order: OrderRequest):
     except db.DBDeadlock as e:
         log.error("db_deadlock", user_id=order.user_id, item=order.item, error=str(e))
         raise HTTPException(status_code=503, detail="Database deadlock, please retry")
-    except db.DBPoolExhausted as e:
-        log.error("db_pool_exhausted", user_id=order.user_id, error=str(e))
-        raise HTTPException(status_code=503, detail="Database pool exhausted")
-    except db.DBConnectionError as e:
-        log.error("db_connection_error", user_id=order.user_id, error=str(e))
-        raise HTTPException(status_code=503, detail="Database connection error")
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e, user_id=order.user_id)
 
     log.info("order_created_successfully", user_id=order.user_id, item=order.item)
 
@@ -137,12 +160,8 @@ async def get_analytics():
     try:
         total_users = await db.count_users()
         total_inventory = await db.total_inventory()
-    except db.DBPoolExhausted as e:
-        log.error("db_pool_exhausted", error=str(e))
-        raise HTTPException(status_code=503, detail="Database pool exhausted")
-    except db.DBConnectionError as e:
-        log.error("db_connection_error", error=str(e))
-        raise HTTPException(status_code=503, detail="Database connection error")
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e)
 
     # Simulate division by zero bug
     if random.random() < 0.3:
