@@ -2,12 +2,12 @@ import sys
 import os
 import structlog
 
-def setup_logger(log_path: str = None):
+def setup_logger(log_path: str = None) -> None:
     """
     Sets up structlog to write to both stdout and a log file.
-    
+
     Called once at app startup — keeps main.py clean.
-    
+
     Why separate file:
     Logging setup is infrastructure, not business logic.
     main.py should only contain the app and its endpoints.
@@ -20,7 +20,7 @@ def setup_logger(log_path: str = None):
         log_path = os.environ.get("LOG_PATH", "../logs/app.log")
 
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
-    
+
     log_file = open(log_path, "a", buffering=1)
 
     class MultiWriter:

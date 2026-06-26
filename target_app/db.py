@@ -1,5 +1,6 @@
 import os
 import asyncio
+from contextlib import asynccontextmanager
 import asyncpg
 import structlog
 
@@ -54,45 +55,43 @@ async def _acquire():
         raise DBConnectionError(str(e))
 
 
-async def get_user(user_id: int) -> dict | None:
+@asynccontextmanager
+async def _connection():
+    """Acquire-then-always-release, in one place instead of a try/finally per function."""
     conn = await _acquire()
     try:
+        yield conn
+    finally:
+        await _pool.release(conn)
+
+
+async def get_user(user_id: int) -> dict | None:
+    async with _connection() as conn:
         row = await conn.fetchrow(
             "SELECT id, name, email, balance FROM users WHERE id = $1", user_id
         )
         return dict(row) if row else None
-    finally:
-        await _pool.release(conn)
 
 
 async def get_item(item_name: str) -> dict | None:
-    conn = await _acquire()
-    try:
+    async with _connection() as conn:
         row = await conn.fetchrow(
             "SELECT name, stock FROM items WHERE name = $1", item_name
         )
         return dict(row) if row else None
-    finally:
-        await _pool.release(conn)
 
 
 async def count_users() -> int:
-    conn = await _acquire()
-    try:
+    async with _connection() as conn:
         return await conn.fetchval("SELECT count(*) FROM users")
-    finally:
-        await _pool.release(conn)
 
 
 async def total_inventory() -> int:
-    conn = await _acquire()
-    try:
+    async with _connection() as conn:
         return await conn.fetchval("SELECT coalesce(sum(stock), 0) FROM items")
-    finally:
-        await _pool.release(conn)
 
 
-async def apply_order(user_id: int, item_name: str, quantity: int, total_charged: float):
+async def apply_order(user_id: int, item_name: str, quantity: int, total_charged: float) -> float:
     """
     Deducts stock and balance, then records the order.
 
@@ -106,8 +105,7 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
     and both land here, overdrawing the balance. This is intentional —
     see docs/SECOND_ITERATION_ARCHITECTURE.md for why.
     """
-    conn = await _acquire()
-    try:
+    async with _connection() as conn:
         try:
             async with conn.transaction():
                 await conn.execute(
@@ -130,7 +128,5 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
             raise DBForeignKeyViolation(str(e))
         except asyncpg.exceptions.DeadlockDetectedError as e:
             raise DBDeadlock(str(e))
-    finally:
-        await _pool.release(conn)
 
     return float(new_balance)
