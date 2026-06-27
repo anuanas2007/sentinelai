@@ -1,4 +1,6 @@
+import os
 import random
+import asyncio
 from typing import NoReturn
 import structlog
 import httpx
@@ -16,6 +18,12 @@ setup_logger()
 log = structlog.get_logger()
 
 ITEM_PRICE = 50.0
+EMAIL_SERVICE_URL = os.environ.get("EMAIL_SERVICE_URL", "http://localhost:8001")
+
+# asyncio's own docs warn that a task with no surviving reference can be
+# garbage-collected mid-execution -- this set exists purely to hold that
+# reference until the task finishes, not for any other bookkeeping.
+_background_tasks: set = set()
 
 
 @asynccontextmanager
@@ -63,6 +71,40 @@ def _handle_db_exception(e: Exception, **log_context) -> NoReturn:
         log.error("db_connection_error", error=str(e), **log_context)
         raise HTTPException(status_code=503, detail="Database connection error")
     raise e
+
+
+async def send_order_confirmation(user_id: int, item: str) -> None:
+    """
+    Fire-and-forget: calls fake_email_service, a deliberately unreliable
+    internal service (~40% failure rate). Whatever happens here, the
+    client already got their response before this runs -- that's the
+    point. Nothing about success or failure here is visible to the
+    caller; only _on_background_task_done (below) makes a failure
+    visible at all, and only asynchronously, after the fact.
+    """
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        response = await client.post(
+            f"{EMAIL_SERVICE_URL}/send", json={"user_id": user_id, "item": item}
+        )
+        response.raise_for_status()
+
+
+def _on_background_task_done(task: "asyncio.Task") -> None:
+    """
+    Without this callback, a failed background task is lost completely --
+    asyncio prints at most a quiet "Task exception was never retrieved"
+    warning whenever the task object happens to get garbage-collected,
+    easily missed in a busy log stream. This is the only thing that
+    turns that into an actual structured event the agent can see.
+    """
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("background_task_failed",
+                  task="send_order_confirmation",
+                  error=str(exc), error_type=type(exc).__name__)
 
 
 class OrderRequest(BaseModel):
@@ -142,6 +184,14 @@ async def create_order(order: OrderRequest):
         _handle_db_exception(e, user_id=order.user_id)
 
     log.info("order_created_successfully", user_id=order.user_id, item=order.item)
+
+    # Fire-and-forget -- the response below goes back to the client
+    # whether this succeeds or not. See send_order_confirmation/
+    # _on_background_task_done for why a failure here is genuinely
+    # invisible unless specifically watched for.
+    task = asyncio.create_task(send_order_confirmation(order.user_id, order.item))
+    _background_tasks.add(task)
+    task.add_done_callback(_on_background_task_done)
 
     # Detected after the fact, not prevented — this is what makes the
     # earlier non-atomic check-then-write race condition actually visible

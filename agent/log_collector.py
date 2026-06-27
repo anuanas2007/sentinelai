@@ -65,6 +65,14 @@ EVENT_SPECIFIC_CONTEXT = {
         "response parsing) is appropriate for what it's calling, rather "
         "than speculating about the third party's internals."
     ),
+    "background_task_failed": (
+        "This involves a fire-and-forget background task calling a "
+        "separate internal service. You have no visibility into why "
+        "that service itself failed -- focus on whether OUR code's own "
+        "handling of the call (retry logic, timeout, error handling) is "
+        "adequate, rather than speculating about the other service's "
+        "internals."
+    ),
 }
 EVENT_SPECIFIC_CONTEXT["external_api_error"] = EVENT_SPECIFIC_CONTEXT["external_api_timeout"]
 

@@ -296,3 +296,33 @@ Worth being precise about why this is safe and doesn't repeat the earlier hand-h
 **A real architectural question surfaced while building this, worth recording:** does Redis replace the in-memory sliding window (`error_detector.py`'s `WINDOW_SECONDS=60`)? No — they're different layers. The in-memory window *is* the real-time detector: it decides, synchronously and in-process, whether a threshold-class error should escalate to a confirmed incident, on every single log line. Redis only stores incidents *after* that decision is already made — it never participates in detection itself, only in retrospective queries the AI engine makes optionally. Collapsing them would mean every log line needs a network round-trip just to decide whether to escalate, and would make core real-time detection depend on Redis being up — directly contradicting the failure-isolation design (`handle_error()`'s Redis write is already wrapped in its own `try/except` specifically so Redis going down never breaks real-time alerting).
 
 **Verified:** rebuilt, triggered `analytics_failed` to its critical threshold, confirmed the investigator correctly chose *not* to call the new tool (confidence was already 1.0 from the code alone — correct judgment that frequency data wouldn't add anything for a fully deterministic bug). Directly tested the tool itself independent of whether the model uses it: correct counts for both the default 24h window and a custom 1h window, correct 0 for an event that hasn't fired.
+
+---
+
+## 6. Background Worker — Silent Async Failures
+
+**Goal:** model a genuinely realistic, common production failure class that nothing in this project produced before: an operation that *looks* successful to the client, but a fire-and-forget side effect silently fails afterward, with no error response, no failed request anywhere — invisible unless something is specifically watching for it.
+
+### A real second service, not an in-process function
+
+`fake_email_service` is a tiny, separate FastAPI app (its own Docker service, `/send` endpoint, ~40% random `500`s) that `target_app`'s background task calls over the network. Considered making this just an in-process Python function instead (simpler today) — rejected, because the very next planned feature (multi-service cascades) needs a real second service anyway; building it as an in-process function now would mean rebuilding it as a real service later for no reason. The random failure rate is fully controlled and predictable, unlike `/external`'s dependency on `httpbin.org`'s actual real-world behavior (which we'd already found to be unpredictable in ways we couldn't fully explain).
+
+**The failure rate had to be genuinely intermittent, not guaranteed.** First instinct was to reuse `/external`'s exact target (a 5-second delay against a 3-second timeout) for the background task too — caught before building: that's rigged to fail 100% of the time, which isn't realistic and isn't interesting to detect (a permanently-broken task isn't "silent," it's just obviously broken). `fake_email_service`'s ~40% random failure rate is intermittent and believable instead.
+
+### The actual mechanism: `asyncio.create_task` + a `done_callback`
+
+`create_order` fires `send_order_confirmation()` via `asyncio.create_task()` right after returning success — the client's response goes back regardless of what happens next. Without anything else, a failure here is genuinely lost: Python prints at most a quiet `"Task exception was never retrieved"` warning whenever the task object happens to get garbage-collected, easily missed in a busy log stream.
+
+A `done_callback` (`_on_background_task_done`) is the entire fix — it checks `task.exception()` when the task finishes and logs `background_task_failed` if there was one. This is a standard, real-world technique (not invented for this project) for preventing total silence; it's still genuinely "silent" in the sense that matters here because the log line appears *after* the response already went out, disconnected in time from the request that caused it — verified directly: a `background_task_failed` line appeared interleaved with two *other, unrelated* orders' success logs, reporting on a task that had been fired several hundred milliseconds earlier.
+
+A module-level `_background_tasks` set holds a reference to each task until it finishes — `asyncio`'s own docs warn that a task with no surviving reference can be garbage-collected mid-execution, which would silently cancel it before the callback ever runs.
+
+### Chose `asyncio.create_task` over FastAPI's `BackgroundTasks`
+
+FastAPI has a built-in `BackgroundTasks` mechanism for exactly this use case. Didn't use it specifically because its exception-propagation behavior on failure isn't something to rely on with full confidence without verifying Starlette's exact internals — using raw `asyncio.create_task()` with an explicit, self-written `done_callback` gives full, certain control over exactly what happens on failure, rather than depending on framework behavior that wasn't independently confirmed.
+
+### AI-worthy, same category as `external_api_timeout`
+
+The proximate cause (`fake_email_service` returned 500) is visible in the log; the real question — *does our own code retry before giving up?* — isn't, and is discoverable by reading `main.py`. Same "investigate our own usage, not the dependency's internals" framing as `external_api_timeout`/`external_api_error`. Deliberately did **not** mount `fake_email_service`'s source into the investigator — even though we wrote it ourselves, treating it as a black box is more realistic (a real email provider wouldn't let you read its source either) and keeps the investigator's scope consistent with the existing `target_app/`-only mount.
+
+**Verified end-to-end:** real second service, real background task, real intermittent async failure, correctly detected as an immediate incident, correctly classified as AI-worthy, and the investigator correctly diagnosed the actual gap (confidence 0.85: "no retry logic, failure is logged but no corrective action taken") rather than speculating about `fake_email_service`'s internals. The fix proposal added a 3-attempt retry loop — right concept, with a minor structural rough edge in the literal diff (same known ceiling as every other fix-proposal this project has produced) — exactly why this stays propose-only for human review.
