@@ -40,16 +40,34 @@ BASE_APP_CONTEXT = (
     "before just because it's familiar."
 )
 
-# Per-event methodology hints -- general investigation technique only,
-# never the architecture or the answer. A hint like "create_order reads
-# balance then separately calls db.apply_order, check for races" isn't
-# investigation guidance, it's handing over the conclusion -- that
-# defeats the point of having an investigator agent. negative_balance_detected
-# deliberately has NO hint here for that reason: it should be findable
-# (or not) through the investigator's own code-reading, same as a real
-# unknown bug would have to be. unhandled_exception and external_api_*
-# get general, transferable technique hints that would apply to any app,
-# not facts specific to this one.
+# Category-level methodology hints, not one bespoke entry per event --
+# four near-identical specific hints (one each for external_api_timeout/
+# error, background_task_failed, email_service_unreachable) collapsed
+# into one shared instruction, since they're all really the same
+# question: "you're calling something you don't fully control, is OUR
+# side of that adequate." Writing a new bespoke hint every time a new
+# dependency-touching feature gets added doesn't scale -- this is
+# meant to cover that whole category automatically instead.
+#
+# Still never the architecture or the answer. A hint like "create_order
+# reads balance then separately calls db.apply_order, check for races"
+# isn't investigation guidance, it's handing over the conclusion --
+# that defeats the point of having an investigator agent.
+# negative_balance_detected and analytics_failed deliberately have NO
+# hint for that reason: they should be findable (or not) through the
+# investigator's own code-reading, same as a real unknown bug would
+# have to be -- already verified this holds (negative_balance_detected
+# was found unaided, confidence 0.95, after its hint was removed).
+_DEPENDENCY_HINT = (
+    "This involves calling something OUR code doesn't fully control "
+    "(a third party, a separate internal service, or a monitor tracking "
+    "one). You have no visibility into why that dependency itself "
+    "failed -- focus on whether OUR code's own handling (retries, "
+    "timeouts, error handling, or coordination with other code that "
+    "touches the same dependency) is adequate, rather than speculating "
+    "about the dependency's internals."
+)
+
 EVENT_SPECIFIC_CONTEXT = {
     "unhandled_exception": (
         "There's no pre-existing knowledge of what this specific crash "
@@ -58,15 +76,11 @@ EVENT_SPECIFIC_CONTEXT = {
         "code, not just any function that happens to raise the same "
         "exception type elsewhere."
     ),
-    "external_api_timeout": (
-        "This involves a call to a third-party HTTP endpoint. You have "
-        "no visibility into the third party itself -- focus on whether "
-        "OUR code's own usage (timeout value, status-code handling, "
-        "response parsing) is appropriate for what it's calling, rather "
-        "than speculating about the third party's internals."
-    ),
+    "external_api_timeout": _DEPENDENCY_HINT,
+    "external_api_error": _DEPENDENCY_HINT,
+    "background_task_failed": _DEPENDENCY_HINT,
+    "email_service_unreachable": _DEPENDENCY_HINT,
 }
-EVENT_SPECIFIC_CONTEXT["external_api_error"] = EVENT_SPECIFIC_CONTEXT["external_api_timeout"]
 
 
 def _build_incident_summary(incident: Incident) -> str:

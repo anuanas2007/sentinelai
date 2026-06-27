@@ -30,6 +30,8 @@ IMMEDIATE_ERRORS = {
     "order_failed_fk_violation",
     "negative_balance_detected",
     "unhandled_exception",
+    "background_task_failed",
+    "email_service_unreachable",
 }
 
 THRESHOLD_ERRORS = {
@@ -74,6 +76,20 @@ THRESHOLD_ERRORS = {
 #     This is the most genuinely organic AI-worthy case of all: every
 #     other entry here was deliberately engineered or at least expected
 #     to occur; this is whatever actually breaks that nobody thought of.
+#   - background_task_failed: the proximate cause (fake_email_service
+#     returned 500) is visible, but whether OUR OWN handling is adequate
+#     -- does send_order_confirmation retry at all before giving up? --
+#     requires reading main.py. Same "investigate our own usage, not the
+#     dependency" category as external_api_timeout/error.
+#   - email_service_unreachable: distinct from background_task_failed --
+#     this isn't about retry logic on one call, it's about coordination.
+#     monitor_email_service_health already knows the service is in a
+#     confirmed outage (3 consecutive failures), but nothing connects
+#     that knowledge to create_order, which keeps firing background
+#     tasks at the dependency regardless. The gap is the missing
+#     circuit breaker between two pieces of code that both exist but
+#     don't talk to each other -- discoverable by reading main.py, not
+#     by investigating why fake_email_service itself is unreliable.
 # A confirmed cascade is also AI-worthy regardless of which events
 # it involves — "is this real causation or coincidence" is itself a
 # genuine hypothesis question, not something the detector can answer.
@@ -84,6 +100,8 @@ AI_WORTHY_EVENTS = {
     "external_api_timeout",
     "external_api_error",
     "unhandled_exception",
+    "background_task_failed",
+    "email_service_unreachable",
 }
 
 # Thresholds for probabilistic errors
