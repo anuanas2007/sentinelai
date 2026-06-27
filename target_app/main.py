@@ -19,6 +19,8 @@ log = structlog.get_logger()
 
 ITEM_PRICE = 50.0
 EMAIL_SERVICE_URL = os.environ.get("EMAIL_SERVICE_URL", "http://localhost:8001")
+EMAIL_HEALTH_CHECK_INTERVAL = 5  # seconds between polls
+EMAIL_HEALTH_FAILURE_THRESHOLD = 3  # consecutive failures = confirmed outage, not noise
 
 # asyncio's own docs warn that a task with no surviving reference can be
 # garbage-collected mid-execution -- this set exists purely to hold that
@@ -26,10 +28,43 @@ EMAIL_SERVICE_URL = os.environ.get("EMAIL_SERVICE_URL", "http://localhost:8001")
 _background_tasks: set = set()
 
 
+async def monitor_email_service_health() -> None:
+    """
+    Runs forever, polling fake_email_service's /send -- not /health,
+    which always returns 200 by design and would never let this detect
+    anything. Treats EMAIL_HEALTH_FAILURE_THRESHOLD consecutive failures
+    as a confirmed sustained outage (not just normal per-call ~40%
+    randomness) and logs email_service_unreachable, then resets the
+    counter so a later, separate outage can trigger a fresh alert
+    rather than this staying permanently "fired" on the first one.
+    """
+    consecutive_failures = 0
+    async with httpx.AsyncClient(timeout=3.0) as client:
+        while True:
+            await asyncio.sleep(EMAIL_HEALTH_CHECK_INTERVAL)
+            try:
+                response = await client.post(
+                    f"{EMAIL_SERVICE_URL}/send", json={"user_id": 0, "item": "_healthcheck"}
+                )
+                response.raise_for_status()
+                consecutive_failures = 0
+            except httpx.HTTPError:
+                consecutive_failures += 1
+                if consecutive_failures >= EMAIL_HEALTH_FAILURE_THRESHOLD:
+                    log.error("email_service_unreachable", consecutive_failures=consecutive_failures)
+                    consecutive_failures = 0
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await db.init_pool()
+    health_check_task = asyncio.create_task(monitor_email_service_health())
     yield
+    health_check_task.cancel()
+    try:
+        await health_check_task
+    except asyncio.CancelledError:
+        pass
     await db.close_pool()
 
 

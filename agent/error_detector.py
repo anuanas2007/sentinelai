@@ -31,6 +31,7 @@ IMMEDIATE_ERRORS = {
     "negative_balance_detected",
     "unhandled_exception",
     "background_task_failed",
+    "email_service_unreachable",
 }
 
 THRESHOLD_ERRORS = {
@@ -80,6 +81,15 @@ THRESHOLD_ERRORS = {
 #     -- does send_order_confirmation retry at all before giving up? --
 #     requires reading main.py. Same "investigate our own usage, not the
 #     dependency" category as external_api_timeout/error.
+#   - email_service_unreachable: distinct from background_task_failed --
+#     this isn't about retry logic on one call, it's about coordination.
+#     monitor_email_service_health already knows the service is in a
+#     confirmed outage (3 consecutive failures), but nothing connects
+#     that knowledge to create_order, which keeps firing background
+#     tasks at the dependency regardless. The gap is the missing
+#     circuit breaker between two pieces of code that both exist but
+#     don't talk to each other -- discoverable by reading main.py, not
+#     by investigating why fake_email_service itself is unreliable.
 # A confirmed cascade is also AI-worthy regardless of which events
 # it involves — "is this real causation or coincidence" is itself a
 # genuine hypothesis question, not something the detector can answer.
@@ -91,6 +101,7 @@ AI_WORTHY_EVENTS = {
     "external_api_error",
     "unhandled_exception",
     "background_task_failed",
+    "email_service_unreachable",
 }
 
 # Thresholds for probabilistic errors
