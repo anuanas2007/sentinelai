@@ -65,6 +65,21 @@ async def _connection():
         await _pool.release(conn)
 
 
+@asynccontextmanager
+async def hold_connection():
+    """
+    Exposes a connection-pool checkout to callers outside this module.
+    Not for normal queries -- those should use the query functions
+    above. This exists specifically for operations that need to
+    demonstrably hold a connection across a slow external call (see
+    target_app/main.py's payment call) to make pool exhaustion a real,
+    reachable cascade mechanism rather than something that only
+    happens to fast in-process queries.
+    """
+    async with _connection() as conn:
+        yield conn
+
+
 async def get_user(user_id: int) -> dict | None:
     async with _connection() as conn:
         row = await conn.fetchrow(

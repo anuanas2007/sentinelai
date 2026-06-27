@@ -21,6 +21,7 @@ ITEM_PRICE = 50.0
 EMAIL_SERVICE_URL = os.environ.get("EMAIL_SERVICE_URL", "http://localhost:8001")
 EMAIL_HEALTH_CHECK_INTERVAL = 60  # seconds between polls
 EMAIL_HEALTH_FAILURE_THRESHOLD = 3  # consecutive failures = confirmed outage, not noise
+PAYMENT_SERVICE_URL = os.environ.get("PAYMENT_SERVICE_URL", "http://localhost:8002")
 
 # asyncio's own docs warn that a task with no surviving reference can be
 # garbage-collected mid-execution -- this set exists purely to hold that
@@ -203,6 +204,31 @@ async def create_order(order: OrderRequest):
                   required=total,
                   available=balance)
         raise HTTPException(status_code=400, detail="Insufficient balance")
+
+    # Charge before writing the order -- unlike the fire-and-forget email
+    # confirmation below, payment genuinely must complete before we can
+    # confirm anything, so this call is synchronous.
+    #
+    # Holding a DB connection across the call is the actual cascade
+    # mechanism: async I/O waits don't tie up the event loop by
+    # themselves (verified directly -- 15 concurrent slow payment calls
+    # with no held connection caused zero latency change on an unrelated
+    # endpoint), so a slow call alone doesn't cascade in this
+    # architecture. A connection IS a genuinely scarce resource (5 max)
+    # -- holding one for up to 8s per slow call can exhaust the pool for
+    # *other*, unrelated requests too, under enough concurrent slow
+    # charges. See docs/SECOND_ITERATION_ARCHITECTURE.md for the full
+    # before/after verification.
+    try:
+        async with db.hold_connection():
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.post(f"{PAYMENT_SERVICE_URL}/charge")
+    except httpx.TimeoutException:
+        log.error("payment_service_timeout",
+                  user_id=order.user_id, item=order.item)
+        raise HTTPException(status_code=503, detail="Payment service unavailable")
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e, user_id=order.user_id)
 
     # Write — deliberately not re-checking balance/stock here. See
     # docs/SECOND_ITERATION_ARCHITECTURE.md for why this gap is intentional.

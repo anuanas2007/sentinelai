@@ -41,6 +41,7 @@ THRESHOLD_ERRORS = {
     "db_pool_exhausted",
     "db_deadlock",
     "db_connection_error",
+    "payment_service_timeout",
 }
 
 # ============================================================

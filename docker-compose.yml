@@ -22,6 +22,14 @@ services:
       timeout: 3s
       retries: 10
 
+  fake-payment-service:
+    build: ./fake_payment_service
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 2s
+      timeout: 3s
+      retries: 10
+
   target-app:
     build: ./target_app
     ports:
@@ -31,10 +39,13 @@ services:
         condition: service_healthy
       fake-email-service:
         condition: service_healthy
+      fake-payment-service:
+        condition: service_healthy
     environment:
       - LOG_PATH=/app/logs/app.log
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       - EMAIL_SERVICE_URL=http://fake-email-service:8001
+      - PAYMENT_SERVICE_URL=http://fake-payment-service:8002
     volumes:
       - log-data:/app/logs
 
