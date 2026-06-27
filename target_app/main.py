@@ -19,7 +19,7 @@ log = structlog.get_logger()
 
 ITEM_PRICE = 50.0
 EMAIL_SERVICE_URL = os.environ.get("EMAIL_SERVICE_URL", "http://localhost:8001")
-EMAIL_HEALTH_CHECK_INTERVAL = 5  # seconds between polls
+EMAIL_HEALTH_CHECK_INTERVAL = 60  # seconds between polls
 EMAIL_HEALTH_FAILURE_THRESHOLD = 3  # consecutive failures = confirmed outage, not noise
 
 # asyncio's own docs warn that a task with no surviving reference can be
@@ -33,7 +33,7 @@ async def monitor_email_service_health() -> None:
     Runs forever, polling fake_email_service's /send -- not /health,
     which always returns 200 by design and would never let this detect
     anything. Treats EMAIL_HEALTH_FAILURE_THRESHOLD consecutive failures
-    as a confirmed sustained outage (not just normal per-call ~40%
+    as a confirmed sustained outage (not just normal per-call ~5%
     randomness) and logs email_service_unreachable, then resets the
     counter so a later, separate outage can trigger a fresh alert
     rather than this staying permanently "fired" on the first one.
@@ -111,7 +111,7 @@ def _handle_db_exception(e: Exception, **log_context) -> NoReturn:
 async def send_order_confirmation(user_id: int, item: str) -> None:
     """
     Fire-and-forget: calls fake_email_service, a deliberately unreliable
-    internal service (~40% failure rate). Whatever happens here, the
+    internal service (~5% failure rate). Whatever happens here, the
     client already got their response before this runs -- that's the
     point. Nothing about success or failure here is visible to the
     caller; only _on_background_task_done (below) makes a failure
