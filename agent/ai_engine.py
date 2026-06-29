@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
 import redis_store
+import vector_memory
 
 # Mounted read-only into the container — toy-scale simplification.
 # See docs/SECOND_ITERATION_ARCHITECTURE.md for why this doesn't scale
@@ -103,6 +104,45 @@ class GetIncidentHistoryTool(BaseTool):
         return f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
 
 
+class _SimilarIncidentsArgs(BaseModel):
+    incident_summary: str = Field(
+        ...,
+        description="The full incident description you were given for this task -- pass it verbatim."
+    )
+
+
+class GetSimilarIncidentsTool(BaseTool):
+    name: str = "get_similar_incidents"
+    description: str = (
+        "Returns past incidents that looked SIMILAR to this one, even if "
+        "they were a different event type -- unlike get_incident_history, "
+        "which only matches the exact same event name. Each result "
+        "includes a past diagnosis AND the fix that was proposed for it. "
+        "This is precedent, not proof -- a similar-looking past incident "
+        "isn't necessarily the same root cause this time. Use it as a "
+        "lead worth checking against the actual code you read, never as "
+        "a substitute for reading it. Returns nothing if no past "
+        "incidents have been analyzed yet -- that's a normal cold-start "
+        "state, not an error."
+    )
+    args_schema: type[BaseModel] = _SimilarIncidentsArgs
+
+    def _run(self, incident_summary: str) -> str:
+        try:
+            matches = vector_memory.query_similar(incident_summary)
+        except Exception as e:
+            return f"Could not retrieve similar incidents: {e}"
+        if not matches:
+            return "No similar past incidents found (or none have been analyzed yet)."
+        lines = []
+        for m in matches:
+            lines.append(
+                f"- Past incident ({m['event']}): {m['diagnosis']}\n"
+                f"  Fix proposed at the time: {m['fix_proposal']}"
+            )
+        return "\n".join(lines)
+
+
 def _stage_callback(stage_label: str):
     """
     Prints a clean, labeled block to stdout when a task finishes --
@@ -118,7 +158,7 @@ def _stage_callback(stage_label: str):
     return callback
 
 
-def _build_crew(incident_summary: str) -> Crew:
+def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
     investigator_agent = Agent(
         role="Incident Investigator",
         goal=(
@@ -134,7 +174,7 @@ def _build_crew(incident_summary: str) -> Crew:
             "honestly; if the evidence is ambiguous, say so rather than "
             "overclaiming."
         ),
-        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool()],
+        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool(), GetSimilarIncidentsTool()],
         llm=LLM_MODEL,
         verbose=False,
     )
@@ -211,20 +251,34 @@ def _build_crew(incident_summary: str) -> Crew:
         callback=_stage_callback("Fix proposal (human review required)"),
     )
 
-    return Crew(
+    crew = Crew(
         agents=[investigator_agent, fix_agent],
         tasks=[investigator_task, fix_task],
         process=Process.sequential,
     )
+    return crew, investigator_task
 
 
-def analyze_incident(incident_summary: str) -> str:
+def analyze_incident(incident_summary: str, event_name: str) -> str:
     """
     Runs the investigator -> fix-proposal crew on one incident.
     Blocking call — meant to be run from a background thread/queue
     consumer, not the main log-watching loop. Returns the final
     fix-proposal agent's output as plain text.
+
+    event_name is only used for vector_memory storage afterward, not
+    passed into the crew itself — the investigator already gets the
+    event name as part of incident_summary.
     """
-    crew = _build_crew(incident_summary)
+    crew, investigator_task = _build_crew(incident_summary)
     result = crew.kickoff()
+
+    # Secondary to the main result — a storage hiccup here shouldn't
+    # take down the whole analysis the caller is waiting on.
+    try:
+        diagnosis = investigator_task.output.raw
+        vector_memory.store_incident(event_name, incident_summary, diagnosis, str(result))
+    except Exception as e:
+        print(f"⚠️  [SentinelAI] Could not store incident in vector memory: {e}", flush=True)
+
     return str(result)
