@@ -8,6 +8,7 @@ from typing import Optional
 from error_detector import ErrorDetector, Incident
 import ai_engine
 import redis_store
+import events
 
 # ============================================================
 # RING BUFFER
@@ -116,6 +117,7 @@ def ai_worker_loop():
         incident = ai_queue.get()
         try:
             summary = _build_incident_summary(incident)
+            events.push_event("ai_analysis_started", incident_event=incident.trigger_event.event)
             print(f"\n🤖 [SentinelAI] Running AI analysis on '{incident.trigger_event.event}'...", flush=True)
             result = ai_engine.analyze_incident(summary, incident.trigger_event.event)
             print("\n" + "=" * 60, flush=True)
@@ -123,13 +125,23 @@ def ai_worker_loop():
             print("=" * 60)
             print(result)
             print("=" * 60 + "\n", flush=True)
-        except Exception:
+            events.push_event(
+                "ai_analysis_result",
+                incident_event=incident.trigger_event.event,
+                result=result,
+            )
+        except Exception as e:
             # Full traceback, not just str(e) — some exceptions (and
             # CrewAI's own error wrapping) produce an unhelpful empty
             # or generic message otherwise.
             import traceback
             print("⚠️  [SentinelAI] AI analysis failed:", flush=True)
             traceback.print_exc()
+            events.push_event(
+                "ai_analysis_failed",
+                incident_event=incident.trigger_event.event,
+                error=str(e),
+            )
         finally:
             ai_queue.task_done()
 
@@ -190,6 +202,16 @@ def handle_error(error_entry: dict):
         # Redis is for long-horizon pattern queries, not core detection --
         # losing it shouldn't take down real-time alerting on top of it.
         print(f"⚠️  [SentinelAI] Failed to write incident to Redis: {e}")
+
+    events.push_event(
+        "incident_detected",
+        incident_event=incident.trigger_event.event,
+        severity=incident.severity,
+        error_count=incident.error_count,
+        pattern=incident.pattern,
+        requires_ai=incident.requires_ai,
+        ai_worthy=incident.ai_worthy,
+    )
 
     # Print incident alert
     severity_emoji = "🚨" if incident.severity in ("immediate", "critical") else "⚠️"
