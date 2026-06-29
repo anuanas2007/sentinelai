@@ -211,6 +211,8 @@ def handle_error(error_entry: dict):
             print(f"\n  🤖 Queued for AI analysis (running in background)")
         else:
             print(f"\n  🤖 Would queue for AI analysis, but OPENAI_API_KEY is not set — skipping")
+    elif incident.ai_worthy:
+        print(f"\n  🤖 AI-worthy, but skipped — already analyzed recently (cooldown)")
 
     # Show context
     recent = incident.context_window[-10:]
@@ -229,6 +231,7 @@ def handle_error(error_entry: dict):
     print(f"  Immediate       : {stats['immediate_incidents']}")
     print(f"  Threshold       : {stats['threshold_incidents']}")
     print(f"  Errors in window: {stats['errors_in_window']}")
+    print(f"  AI calls suppressed (cooldown): {stats['ai_calls_suppressed']}")
 
     if stats['confirmed_cascades']:
         print(f"  Confirmed cascades: {stats['confirmed_cascades']}")
