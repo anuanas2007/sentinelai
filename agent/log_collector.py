@@ -117,7 +117,7 @@ def ai_worker_loop():
         try:
             summary = _build_incident_summary(incident)
             print(f"\n🤖 [SentinelAI] Running AI analysis on '{incident.trigger_event.event}'...", flush=True)
-            result = ai_engine.analyze_incident(summary)
+            result = ai_engine.analyze_incident(summary, incident.trigger_event.event)
             print("\n" + "=" * 60, flush=True)
             print("🤖 AI ANALYSIS RESULT")
             print("=" * 60)
