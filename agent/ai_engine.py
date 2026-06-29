@@ -31,6 +31,7 @@ from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
 import redis_store
 import vector_memory
+import events
 
 # Mounted read-only into the container — toy-scale simplification.
 # See docs/SECOND_ITERATION_ARCHITECTURE.md for why this doesn't scale
@@ -52,8 +53,12 @@ class ListSourceFilesTool(BaseTool):
         try:
             names = sorted(os.listdir(TARGET_APP_SRC))
         except OSError as e:
-            return f"Could not list source directory: {e}"
-        return "\n".join(n for n in names if n.endswith(".py")) or "No .py files found"
+            result = f"Could not list source directory: {e}"
+            events.push_event("tool_call", tool="list_source_files", input="", output=result)
+            return result
+        result = "\n".join(n for n in names if n.endswith(".py")) or "No .py files found"
+        events.push_event("tool_call", tool="list_source_files", input="", output=result)
+        return result
 
 
 class ReadSourceFileTool(BaseTool):
@@ -74,9 +79,16 @@ class ReadSourceFileTool(BaseTool):
         safe_name = os.path.basename(filename)
         path = os.path.join(TARGET_APP_SRC, safe_name)
         if not os.path.isfile(path):
-            return f"File not found: {safe_name}"
+            result = f"File not found: {safe_name}"
+            events.push_event("tool_call", tool="read_source_file", input=filename, output=result)
+            return result
         with open(path, "r") as f:
-            return f.read()
+            content = f.read()
+        # Full content goes back to the model; the event log only gets a
+        # preview, so the live feed doesn't balloon with entire files.
+        preview = content[:1000] + ("... [truncated]" if len(content) > 1000 else "")
+        events.push_event("tool_call", tool="read_source_file", input=filename, output=preview)
+        return content
 
 
 class _IncidentHistoryArgs(BaseModel):
@@ -99,9 +111,14 @@ class GetIncidentHistoryTool(BaseTool):
     def _run(self, event_name: str, hours: float = 24) -> str:
         try:
             count = redis_store.count_in_window(event_name, hours=hours)
+            result = f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
         except Exception as e:
-            return f"Could not retrieve incident history: {e}"
-        return f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
+            result = f"Could not retrieve incident history: {e}"
+        events.push_event(
+            "tool_call", tool="get_incident_history",
+            input=f"{event_name} (last {hours}h)", output=result,
+        )
+        return result
 
 
 class _SimilarIncidentsArgs(BaseModel):
@@ -131,16 +148,22 @@ class GetSimilarIncidentsTool(BaseTool):
         try:
             matches = vector_memory.query_similar(incident_summary)
         except Exception as e:
-            return f"Could not retrieve similar incidents: {e}"
+            result = f"Could not retrieve similar incidents: {e}"
+            events.push_event("tool_call", tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            return result
         if not matches:
-            return "No similar past incidents found (or none have been analyzed yet)."
+            result = "No similar past incidents found (or none have been analyzed yet)."
+            events.push_event("tool_call", tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            return result
         lines = []
         for m in matches:
             lines.append(
                 f"- Past incident ({m['event']}): {m['diagnosis']}\n"
                 f"  Fix proposed at the time: {m['fix_proposal']}"
             )
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        events.push_event("tool_call", tool="get_similar_incidents", input=incident_summary[:200], output=result)
+        return result
 
 
 def _stage_callback(stage_label: str):
@@ -155,6 +178,7 @@ def _stage_callback(stage_label: str):
         print("-" * 60)
         print(text)
         print("-" * 60, flush=True)
+        events.push_event("stage_complete", stage=stage_label, output=text)
     return callback
 
 
