@@ -111,6 +111,15 @@ INCIDENT_THRESHOLD = 5   # errors in window = invoke AI
 WINDOW_SECONDS = 60      # sliding window size
 CASCADE_CONFIRMATION_THRESHOLD = 3
 
+# An event being AI-worthy doesn't mean every single occurrence should
+# call AI. Without this, a single burst (one real cascade test fired
+# db_pool_exhausted 32 times) would dispatch one AI call per occurrence
+# past the threshold -- all diagnosing the identical root cause. This
+# gates *dispatch*, not detection: every occurrence still gets flagged
+# and logged exactly as before, only repeat AI calls within the
+# cooldown for the same event/cascade get skipped.
+AI_COOLDOWN_SECONDS = 120
+
 
 @dataclass
 class ErrorEvent:
@@ -142,7 +151,11 @@ class Incident:
     severity: str        # "immediate", "warning", "critical"
     pattern: Optional[str]
     context_window: list
-    requires_ai: bool    # should AI reasoning engine be invoked?
+    requires_ai: bool    # should AI reasoning engine be invoked right now?
+    ai_worthy: bool = False  # is this event/cascade AI-worthy at all,
+                             # ignoring cooldown? lets callers distinguish
+                             # "never AI-worthy" from "AI-worthy but
+                             # suppressed by cooldown this time"
 
 
 class ErrorDetector:
@@ -177,6 +190,13 @@ class ErrorDetector:
         self.incident_count: int = 0
         self.immediate_count: int = 0
         self.threshold_count: int = 0
+
+        # AI dispatch cooldown -- keyed by cascade pattern when one's
+        # confirmed, otherwise by event name. Only set when AI is
+        # actually dispatched, not on every suppressed attempt, so the
+        # next occurrence after the cooldown expires triggers AI again.
+        self.last_ai_call: dict = {}
+        self.ai_calls_suppressed: int = 0
 
     def _classify_error(self, event_name: str) -> str:
         """
@@ -245,6 +265,31 @@ class ErrorDetector:
         """
         return event_name in AI_WORTHY_EVENTS or cascade is not None
 
+    def _should_call_ai(
+        self,
+        event_name: str,
+        cascade: Optional[str],
+        wall_time: float
+    ) -> bool:
+        """
+        Gates AI *dispatch*, separate from AI-worthiness. A cascade
+        pattern is keyed by the pattern string, not the triggering
+        event name -- two different cascades are genuinely different
+        incidents and shouldn't share a cooldown.
+        """
+        if not self._requires_ai(event_name, cascade):
+            return False
+
+        key = cascade if cascade else event_name
+        last_call = self.last_ai_call.get(key)
+
+        if last_call is not None and wall_time - last_call < AI_COOLDOWN_SECONDS:
+            self.ai_calls_suppressed += 1
+            return False
+
+        self.last_ai_call[key] = wall_time
+        return True
+
     def _handle_immediate(
         self,
         error_event: ErrorEvent,
@@ -257,6 +302,7 @@ class ErrorDetector:
         self.immediate_count += 1
         self.incident_count += 1
         cascade = self._detect_cascade(error_event)
+        ai_worthy = self._requires_ai(error_event.event, cascade)
 
         return Incident(
             trigger_event=error_event,
@@ -265,7 +311,8 @@ class ErrorDetector:
             severity="immediate",
             pattern=cascade,
             context_window=context_window,
-            requires_ai=self._requires_ai(error_event.event, cascade)
+            requires_ai=ai_worthy and self._should_call_ai(error_event.event, cascade, error_event.wall_time),
+            ai_worthy=ai_worthy
         )
 
     def _handle_threshold(
@@ -285,6 +332,7 @@ class ErrorDetector:
         if error_count >= INCIDENT_THRESHOLD:
             self.threshold_count += 1
             self.incident_count += 1
+            ai_worthy = self._requires_ai(error_event.event, cascade)
             return Incident(
                 trigger_event=error_event,
                 error_count=error_count,
@@ -292,7 +340,8 @@ class ErrorDetector:
                 severity="critical",
                 pattern=cascade,
                 context_window=context_window,
-                requires_ai=self._requires_ai(error_event.event, cascade)
+                requires_ai=ai_worthy and self._should_call_ai(error_event.event, cascade, error_event.wall_time),
+                ai_worthy=ai_worthy
             )
         elif error_count >= WARNING_THRESHOLD:
             return Incident(
@@ -302,7 +351,8 @@ class ErrorDetector:
                 severity="warning",
                 pattern=cascade,
                 context_window=context_window,
-                requires_ai=False  # warning — watch but don't invoke AI yet
+                requires_ai=False,  # warning — watch but don't invoke AI yet
+                ai_worthy=self._requires_ai(error_event.event, cascade)
             )
         return None
 
@@ -359,9 +409,11 @@ class ErrorDetector:
                 k: v for k, v in self.cascade_counts.items()
                 if v < CASCADE_CONFIRMATION_THRESHOLD
             },
+            "ai_calls_suppressed": self.ai_calls_suppressed,
             "thresholds": {
                 "warning": WARNING_THRESHOLD,
                 "incident": INCIDENT_THRESHOLD,
                 "window_seconds": WINDOW_SECONDS,
+                "ai_cooldown_seconds": AI_COOLDOWN_SECONDS,
             }
         }
