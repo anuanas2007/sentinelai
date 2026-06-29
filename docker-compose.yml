@@ -69,6 +69,8 @@ services:
 
   sentinel-agent:
     build: ./agent
+    ports:
+      - "9000:9000"
     depends_on:
       target-app:
         condition: service_started

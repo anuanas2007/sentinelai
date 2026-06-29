@@ -320,8 +320,13 @@ def watch_log_file(log_path: str):
 
 
 if __name__ == "__main__":
-    # Daemon thread so it doesn't block process exit; started once,
-    # before the log-watching loop, since the loop runs forever.
+    # uvicorn now owns the main thread (see web.py) -- the watcher loop
+    # that used to block here, and the AI worker that already ran in
+    # its own thread, both move to background threads instead. Neither
+    # changes behavior, only which thread runs them.
+    import uvicorn
+    import web
+
     if os.environ.get("OPENAI_API_KEY"):
         threading.Thread(target=ai_worker_loop, daemon=True).start()
     else:
@@ -330,4 +335,6 @@ if __name__ == "__main__":
     # LOG_PATH env var lets docker-compose point this at the shared
     # volume mount without changing the local dev default.
     LOG_PATH = os.environ.get("LOG_PATH", "logs/app.log")
-    watch_log_file(LOG_PATH)
+    threading.Thread(target=watch_log_file, args=(LOG_PATH,), daemon=True).start()
+
+    uvicorn.run(web.app, host="0.0.0.0", port=9000)
