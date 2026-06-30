@@ -18,7 +18,9 @@ import json
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import events
+import vector_memory
 
 app = FastAPI(title="SentinelAI Live UI")
 
@@ -76,3 +78,24 @@ async def activity_history(limit: int = 100):
 @app.get("/api/events/activity/stream")
 async def activity_stream():
     return _make_stream(events.get_activity_events_since, events.get_recent_activity_events)
+
+
+class RatingRequest(BaseModel):
+    rating: str  # "correct" | "incorrect" | "partial"
+    note: str = ""
+
+
+@app.post("/api/incidents/{incident_id}/rate")
+async def rate_incident(incident_id: str, body: RatingRequest):
+    """
+    The actual point of this endpoint isn't UI polish -- a correctness
+    judgment recorded here is the outcome-tracking data the learned
+    classifier and fix-accuracy benchmarking have both been blocked on.
+    """
+    try:
+        found = vector_memory.rate_incident(incident_id, body.rating, body.note)
+    except Exception as e:
+        return {"status": "error", "error": str(e)}
+    if not found:
+        return {"status": "not_found"}
+    return {"status": "ok"}

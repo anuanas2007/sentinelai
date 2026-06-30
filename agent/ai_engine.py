@@ -318,7 +318,7 @@ def analyze_incident(incident_summary: str, event_name: str, incident_id: str = 
     # take down the whole analysis the caller is waiting on.
     try:
         diagnosis = investigator_task.output.raw
-        vector_memory.store_incident(event_name, incident_summary, diagnosis, str(result))
+        vector_memory.store_incident(incident_id, event_name, incident_summary, diagnosis, str(result))
     except Exception as e:
         print(f"⚠️  [SentinelAI] Could not store incident in vector memory: {e}", flush=True)
 
