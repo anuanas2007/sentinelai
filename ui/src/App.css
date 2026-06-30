@@ -334,6 +334,17 @@ body {
 .ai-output h1, .ai-output h2, .ai-output h3, .ai-output h4 {
   margin: 16px 0 8px;
   color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.ai-output ul, .ai-output ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.ai-output li {
+  margin-bottom: 4px;
 }
 
 .inline-code {
