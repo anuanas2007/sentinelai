@@ -40,6 +40,13 @@ TARGET_APP_SRC = os.environ.get("TARGET_APP_SRC", "/app/target_app_src")
 
 LLM_MODEL = "gpt-4o-mini"  # cheap model — root cause text generation, not heavy code synthesis
 
+# Set at the start of each analyze_incident() call, read by every tool's
+# _run() and the stage callback below to tag their events with the
+# incident that triggered this run. Safe as a module-level variable
+# (not per-call state) only because ai_worker_loop processes incidents
+# strictly one at a time -- see log_collector.py.
+_current_incident_id: str = ""
+
 
 class ListSourceFilesTool(BaseTool):
     name: str = "list_source_files"
@@ -54,10 +61,10 @@ class ListSourceFilesTool(BaseTool):
             names = sorted(os.listdir(TARGET_APP_SRC))
         except OSError as e:
             result = f"Could not list source directory: {e}"
-            events.push_event("tool_call", tool="list_source_files", input="", output=result)
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="list_source_files", input="", output=result)
             return result
         result = "\n".join(n for n in names if n.endswith(".py")) or "No .py files found"
-        events.push_event("tool_call", tool="list_source_files", input="", output=result)
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="list_source_files", input="", output=result)
         return result
 
 
@@ -80,14 +87,14 @@ class ReadSourceFileTool(BaseTool):
         path = os.path.join(TARGET_APP_SRC, safe_name)
         if not os.path.isfile(path):
             result = f"File not found: {safe_name}"
-            events.push_event("tool_call", tool="read_source_file", input=filename, output=result)
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="read_source_file", input=filename, output=result)
             return result
         with open(path, "r") as f:
             content = f.read()
         # Full content goes back to the model; the event log only gets a
         # preview, so the live feed doesn't balloon with entire files.
         preview = content[:1000] + ("... [truncated]" if len(content) > 1000 else "")
-        events.push_event("tool_call", tool="read_source_file", input=filename, output=preview)
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="read_source_file", input=filename, output=preview)
         return content
 
 
@@ -114,8 +121,8 @@ class GetIncidentHistoryTool(BaseTool):
             result = f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
         except Exception as e:
             result = f"Could not retrieve incident history: {e}"
-        events.push_event(
-            "tool_call", tool="get_incident_history",
+        events.push_pipeline_event(
+            "tool_call", incident_id=_current_incident_id, tool="get_incident_history",
             input=f"{event_name} (last {hours}h)", output=result,
         )
         return result
@@ -149,11 +156,11 @@ class GetSimilarIncidentsTool(BaseTool):
             matches = vector_memory.query_similar(incident_summary)
         except Exception as e:
             result = f"Could not retrieve similar incidents: {e}"
-            events.push_event("tool_call", tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
             return result
         if not matches:
             result = "No similar past incidents found (or none have been analyzed yet)."
-            events.push_event("tool_call", tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
             return result
         lines = []
         for m in matches:
@@ -162,7 +169,7 @@ class GetSimilarIncidentsTool(BaseTool):
                 f"  Fix proposed at the time: {m['fix_proposal']}"
             )
         result = "\n".join(lines)
-        events.push_event("tool_call", tool="get_similar_incidents", input=incident_summary[:200], output=result)
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
         return result
 
 
@@ -178,7 +185,7 @@ def _stage_callback(stage_label: str):
         print("-" * 60)
         print(text)
         print("-" * 60, flush=True)
-        events.push_event("stage_complete", stage=stage_label, output=text)
+        events.push_pipeline_event("stage_complete", incident_id=_current_incident_id, stage=stage_label, output=text)
     return callback
 
 
@@ -288,7 +295,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
     return crew, investigator_task
 
 
-def analyze_incident(incident_summary: str, event_name: str) -> str:
+def analyze_incident(incident_summary: str, event_name: str, incident_id: str = "") -> str:
     """
     Runs the investigator -> fix-proposal crew on one incident.
     Blocking call — meant to be run from a background thread/queue
@@ -297,8 +304,13 @@ def analyze_incident(incident_summary: str, event_name: str) -> str:
 
     event_name is only used for vector_memory storage afterward, not
     passed into the crew itself — the investigator already gets the
-    event name as part of incident_summary.
+    event name as part of incident_summary. incident_id is similarly
+    not passed into the crew -- it's read by the tools/stage callback
+    via the module-level _current_incident_id, set here.
     """
+    global _current_incident_id
+    _current_incident_id = incident_id
+
     crew, investigator_task = _build_crew(incident_summary)
     result = crew.kickoff()
 
