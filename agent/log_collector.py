@@ -3,6 +3,7 @@ import time
 import os
 import queue
 import threading
+import uuid
 from collections import deque
 from typing import Optional
 from error_detector import ErrorDetector, Incident
@@ -28,7 +29,7 @@ detector = ErrorDetector()
 # A background thread (started in __main__) consumes this queue, so
 # the log-watching loop below never blocks waiting on an LLM call.
 # ============================================================
-ai_queue: "queue.Queue[Incident]" = queue.Queue()
+ai_queue: "queue.Queue[tuple[str, Incident]]" = queue.Queue()
 
 
 BASE_APP_CONTEXT = (
@@ -111,22 +112,29 @@ def ai_worker_loop():
     """
     Runs forever in a background thread. Pulls one incident at a time
     off ai_queue and runs the CrewAI pipeline on it — this is the only
-    place in the agent that makes a blocking LLM call.
+    place in the agent that makes a blocking LLM call. Strictly
+    sequential (one incident fully finishes before the next starts),
+    which is what makes ai_engine.py's incident_id correlation safe
+    without any extra locking on that side.
     """
     while True:
-        incident = ai_queue.get()
+        incident_id, incident = ai_queue.get()
         try:
             summary = _build_incident_summary(incident)
-            events.push_event("ai_analysis_started", incident_event=incident.trigger_event.event)
+            events.push_pipeline_event(
+                "ai_analysis_started", incident_id=incident_id,
+                incident_event=incident.trigger_event.event,
+            )
             print(f"\n🤖 [SentinelAI] Running AI analysis on '{incident.trigger_event.event}'...", flush=True)
-            result = ai_engine.analyze_incident(summary, incident.trigger_event.event)
+            result = ai_engine.analyze_incident(summary, incident.trigger_event.event, incident_id)
             print("\n" + "=" * 60, flush=True)
             print("🤖 AI ANALYSIS RESULT")
             print("=" * 60)
             print(result)
             print("=" * 60 + "\n", flush=True)
-            events.push_event(
+            events.push_pipeline_event(
                 "ai_analysis_result",
+                incident_id=incident_id,
                 incident_event=incident.trigger_event.event,
                 result=result,
             )
@@ -137,8 +145,9 @@ def ai_worker_loop():
             import traceback
             print("⚠️  [SentinelAI] AI analysis failed:", flush=True)
             traceback.print_exc()
-            events.push_event(
+            events.push_pipeline_event(
                 "ai_analysis_failed",
+                incident_id=incident_id,
                 incident_event=incident.trigger_event.event,
                 error=str(e),
             )
@@ -196,6 +205,12 @@ def handle_error(error_entry: dict):
         # Below threshold — noise, ignore
         return
 
+    # Short, human-legible ID -- generated here (not in error_detector.py,
+    # which has no concept of a UI) and threaded through every event this
+    # incident produces from here on, including into ai_engine.py's tool
+    # calls, so a UI can correlate "this fix came from that trigger."
+    incident_id = uuid.uuid4().hex[:8]
+
     try:
         redis_store.write_incident(incident)
     except Exception as e:
@@ -203,8 +218,9 @@ def handle_error(error_entry: dict):
         # losing it shouldn't take down real-time alerting on top of it.
         print(f"⚠️  [SentinelAI] Failed to write incident to Redis: {e}")
 
-    events.push_event(
+    events.push_pipeline_event(
         "incident_detected",
+        incident_id=incident_id,
         incident_event=incident.trigger_event.event,
         severity=incident.severity,
         error_count=incident.error_count,
@@ -229,12 +245,20 @@ def handle_error(error_entry: dict):
 
     if incident.requires_ai:
         if os.environ.get("OPENAI_API_KEY"):
-            ai_queue.put(incident)
+            ai_queue.put((incident_id, incident))
             print(f"\n  🤖 Queued for AI analysis (running in background)")
         else:
             print(f"\n  🤖 Would queue for AI analysis, but OPENAI_API_KEY is not set — skipping")
     elif incident.ai_worthy:
-        print(f"\n  🤖 AI-worthy, but skipped — already analyzed recently (cooldown)")
+        # ai_worthy + not requires_ai is genuinely two different reasons,
+        # previously both printed as "(cooldown)" even when the real
+        # reason was just "hasn't crossed the incident threshold yet" --
+        # a warning-severity incident never even attempts AI dispatch in
+        # the first place, so there's nothing to have been suppressed.
+        if incident.severity == "warning":
+            print(f"\n  🤖 AI-worthy, but not yet escalated — below the incident threshold")
+        else:
+            print(f"\n  🤖 AI-worthy, but skipped — already analyzed recently (cooldown)")
 
     # Show context
     recent = incident.context_window[-10:]
@@ -313,6 +337,16 @@ def watch_log_file(log_path: str):
                 # Add to ring buffer
                 log_entry["_raw"] = raw_line.strip()
                 log_buffer.append(log_entry)
+
+                # Every line, success or failure -- this is target_app's
+                # own raw activity, separate from the detection/AI
+                # pipeline above. A UI showing only errors would have no
+                # sense of "is the app even doing anything right now."
+                events.push_activity_event(
+                    "target_app_log",
+                    name=log_entry.get("event", ""),
+                    level=log_entry.get("level", "info"),
+                )
 
                 # If error — handle immediately
                 if is_error(log_entry):
