@@ -158,6 +158,15 @@ body {
   color: #999;
 }
 
+.card-clickable {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.card-clickable:hover {
+  background: #20232b;
+}
+
 .pill {
   font-size: 10px;
   padding: 2px 8px;
@@ -241,4 +250,153 @@ body {
   max-height: 250px;
   overflow-y: auto;
   color: #aaa;
+}
+
+/* Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 24px;
+}
+
+.modal-panel {
+  background: #15171c;
+  border: 1px solid #2a2d34;
+  border-radius: 10px;
+  width: 100%;
+  max-width: 900px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2a2d34;
+  flex-shrink: 0;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #999;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.modal-close:hover {
+  color: #fff;
+}
+
+.modal-body {
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.modal-tool-call {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #2a2d34;
+  font-size: 13px;
+}
+
+.modal-tool-call strong {
+  color: #c084fc;
+}
+
+/* AI output (markdown + code blocks) */
+.ai-output {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #ddd;
+}
+
+.ai-output p {
+  margin: 0 0 10px;
+}
+
+.ai-output h1, .ai-output h2, .ai-output h3, .ai-output h4 {
+  margin: 16px 0 8px;
+  color: #fff;
+}
+
+.inline-code {
+  background: #2a2d34;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+/* Rating */
+.rating-buttons {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #2a2d34;
+}
+
+.rating-label {
+  display: block;
+  font-size: 13px;
+  color: #999;
+  margin-bottom: 8px;
+}
+
+.rating-options {
+  display: flex;
+  gap: 8px;
+}
+
+.rating-btn {
+  border: 1px solid #2a2d34;
+  background: #1a1d23;
+  color: #ddd;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.rating-correct:hover {
+  border-color: #4ade80;
+  color: #4ade80;
+}
+
+.rating-partial:hover {
+  border-color: #fbbf24;
+  color: #fbbf24;
+}
+
+.rating-incorrect:hover {
+  border-color: #f87171;
+  color: #f87171;
+}
+
+.rating-confirmed {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #2a2d34;
+  font-size: 13px;
+  color: #4ade80;
+}
+
+.rating-error {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #f87171;
 }

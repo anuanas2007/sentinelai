@@ -2,6 +2,9 @@ import { useMemo, useState } from 'react'
 import './App.css'
 import { useEventStream } from './useEventStream'
 import { groupIncidents } from './groupIncidents'
+import { Modal } from './Modal'
+import { AiOutput } from './AiOutput'
+import { RatingButtons } from './RatingButtons'
 
 function ConnectionDot({ connected }) {
   return (
@@ -37,7 +40,7 @@ function detectorStatus(incident) {
   return { text: 'not AI-worthy', cls: 'muted' }
 }
 
-function DetectorColumn({ incidents }) {
+function DetectorColumn({ incidents, onExpand }) {
   return (
     <div className="column">
       <h2>Detector</h2>
@@ -46,7 +49,7 @@ function DetectorColumn({ incidents }) {
         {incidents.map((incident) => {
           const status = detectorStatus(incident)
           return (
-            <div key={incident.id} className="card">
+            <div key={incident.id} className="card card-clickable" onClick={() => onExpand(incident, 'detector')}>
               <div className="card-title">{incident.incident_event}</div>
               <div className="card-meta">
                 <span className={`pill severity-${incident.severity}`}>{incident.severity}</span>
@@ -61,20 +64,7 @@ function DetectorColumn({ incidents }) {
   )
 }
 
-function ExpandableText({ text }) {
-  const [open, setOpen] = useState(false)
-  if (!text) return null
-  return (
-    <div className="expandable">
-      <button className="expand-toggle" onClick={() => setOpen(!open)}>
-        {open ? 'hide' : 'show'} output
-      </button>
-      {open && <pre className="expand-content">{text}</pre>}
-    </div>
-  )
-}
-
-function InvestigatorColumn({ incidents }) {
+function InvestigatorColumn({ incidents, onExpand }) {
   const active = incidents.filter((i) => i.investigatorEvents.length > 0)
   return (
     <div className="column">
@@ -82,30 +72,12 @@ function InvestigatorColumn({ incidents }) {
       <div className="column-body">
         {active.length === 0 && <p className="empty">No investigations yet.</p>}
         {active.map((incident) => (
-          <div key={incident.id} className="card">
+          <div key={incident.id} className="card card-clickable" onClick={() => onExpand(incident, 'investigator')}>
             <div className="card-title">{incident.incident_event}</div>
-            {incident.investigatorEvents.map((e, i) => {
-              if (e.type === 'ai_analysis_started') {
-                return <div key={i} className="step">started investigating...</div>
-              }
-              if (e.type === 'tool_call') {
-                return (
-                  <div key={i} className="step">
-                    <span className="step-tool">{e.tool}</span>({e.input || ''})
-                    <ExpandableText text={e.output} />
-                  </div>
-                )
-              }
-              if (e.type === 'stage_complete') {
-                return (
-                  <div key={i} className="step step-final">
-                    <strong>Root cause</strong>
-                    <pre className="result-text">{e.output}</pre>
-                  </div>
-                )
-              }
-              return null
-            })}
+            <div className="card-note">
+              {incident.investigatorEvents.filter((e) => e.type === 'tool_call').length} tool call(s)
+              {incident.investigatorEvents.some((e) => e.type === 'stage_complete') ? ' · root cause found' : ' · investigating...'}
+            </div>
           </div>
         ))}
       </div>
@@ -113,7 +85,7 @@ function InvestigatorColumn({ incidents }) {
   )
 }
 
-function FixerColumn({ incidents }) {
+function FixerColumn({ incidents, onExpand }) {
   const active = incidents.filter((i) => i.fixerEvents.length > 0)
   return (
     <div className="column">
@@ -121,11 +93,9 @@ function FixerColumn({ incidents }) {
       <div className="column-body">
         {active.length === 0 && <p className="empty">No fixes proposed yet.</p>}
         {active.map((incident) => (
-          <div key={incident.id} className="card">
+          <div key={incident.id} className="card card-clickable" onClick={() => onExpand(incident, 'fixer')}>
             <div className="card-title">{incident.incident_event}</div>
-            {incident.fixerEvents.map((e, i) => (
-              <pre key={i} className="result-text">{e.output || e.error}</pre>
-            ))}
+            <div className="card-note">click to view fix proposal</div>
           </div>
         ))}
       </div>
@@ -133,10 +103,54 @@ function FixerColumn({ incidents }) {
   )
 }
 
+function IncidentModal({ incident, view, onClose }) {
+  if (view === 'detector') {
+    return (
+      <Modal title={`Detected: ${incident.incident_event}`} onClose={onClose}>
+        <p><strong>Severity:</strong> {incident.severity}</p>
+        <p><strong>Requires AI:</strong> {String(incident.requires_ai)}</p>
+        <p><strong>AI-worthy:</strong> {String(incident.ai_worthy)}</p>
+        {incident.pattern && <p><strong>Cascade pattern:</strong> {incident.pattern}</p>}
+      </Modal>
+    )
+  }
+
+  if (view === 'investigator') {
+    const toolCalls = incident.investigatorEvents.filter((e) => e.type === 'tool_call')
+    const rootCause = incident.investigatorEvents.find((e) => e.type === 'stage_complete')
+    return (
+      <Modal title={`Investigation: ${incident.incident_event}`} onClose={onClose}>
+        {toolCalls.map((e, i) => (
+          <div key={i} className="modal-tool-call">
+            <strong>{e.tool}</strong>({e.input || ''})
+            <AiOutput text={e.output} />
+          </div>
+        ))}
+        {rootCause && (
+          <>
+            <h4>Root cause</h4>
+            <AiOutput text={rootCause.output} />
+          </>
+        )}
+      </Modal>
+    )
+  }
+
+  // fixer
+  const fix = incident.fixerEvents[0]
+  return (
+    <Modal title={`Fix proposal: ${incident.incident_event}`} onClose={onClose}>
+      <AiOutput text={fix?.output || fix?.error} />
+      <RatingButtons incidentId={incident.id} />
+    </Modal>
+  )
+}
+
 function App() {
   const activity = useEventStream('/api/events/activity/history', '/api/events/activity/stream')
   const pipeline = useEventStream('/api/events/pipeline/history', '/api/events/pipeline/stream')
   const incidents = useMemo(() => groupIncidents(pipeline.events), [pipeline.events])
+  const [expanded, setExpanded] = useState(null) // { incident, view }
 
   return (
     <div className="app">
@@ -146,10 +160,13 @@ function App() {
       </header>
       <main className="columns">
         <ActivityColumn events={activity.events} />
-        <DetectorColumn incidents={incidents} />
-        <InvestigatorColumn incidents={incidents} />
-        <FixerColumn incidents={incidents} />
+        <DetectorColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
+        <InvestigatorColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
+        <FixerColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
       </main>
+      {expanded && (
+        <IncidentModal incident={expanded.incident} view={expanded.view} onClose={() => setExpanded(null)} />
+      )}
     </div>
   )
 }
