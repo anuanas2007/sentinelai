@@ -320,6 +320,19 @@ body {
   color: #c084fc;
 }
 
+.tool-output {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: #11131a;
+  padding: 10px;
+  border-radius: 6px;
+  margin: 8px 0 0;
+  max-height: 350px;
+  overflow-y: auto;
+  color: #ccc;
+}
+
 /* AI output (markdown + code blocks) */
 .ai-output {
   font-size: 14px;

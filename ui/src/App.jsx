@@ -130,7 +130,12 @@ function IncidentModal({ incident, view, onClose }) {
         {toolCalls.map((e, i) => (
           <div key={i} className="modal-tool-call">
             <strong>{e.tool}</strong>({e.input || ''})
-            <AiOutput text={e.output} />
+            {/* Raw tool output (file contents, filenames, plain
+                sentences we wrote ourselves) -- not markdown, so this
+                stays a plain <pre>, not AiOutput. Markdown collapses
+                newlines/indentation in plain text into one run-on
+                paragraph, which is exactly wrong for source code. */}
+            <pre className="tool-output">{e.output}</pre>
           </div>
         ))}
         {rootCause && (
