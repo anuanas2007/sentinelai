@@ -131,7 +131,7 @@ class GetIncidentHistoryTool(BaseTool):
 class _SimilarIncidentsArgs(BaseModel):
     incident_summary: str = Field(
         ...,
-        description="The full incident description you were given for this task -- pass it verbatim."
+        description="The root cause hypothesis text -- pass it verbatim, not a paraphrase."
     )
 
 
@@ -143,11 +143,12 @@ class GetSimilarIncidentsTool(BaseTool):
         "which only matches the exact same event name. Each result "
         "includes a past diagnosis AND the fix that was proposed for it. "
         "This is precedent, not proof -- a similar-looking past incident "
-        "isn't necessarily the same root cause this time. Use it as a "
-        "lead worth checking against the actual code you read, never as "
-        "a substitute for reading it. Returns nothing if no past "
-        "incidents have been analyzed yet -- that's a normal cold-start "
-        "state, not an error."
+        "isn't necessarily the same root cause this time, and its fix "
+        "may not transfer directly. Use it as a lead to consider "
+        "alongside the actual retrieved file content, never as a "
+        "substitute for it. Returns nothing if no past incidents have "
+        "been analyzed yet -- that's a normal cold-start state, not an "
+        "error."
     )
     args_schema: type[BaseModel] = _SimilarIncidentsArgs
 
@@ -205,7 +206,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "honestly; if the evidence is ambiguous, say so rather than "
             "overclaiming."
         ),
-        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool(), GetSimilarIncidentsTool()],
+        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool()],
         llm=LLM_MODEL,
         verbose=False,
     )
@@ -219,6 +220,12 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "specific code diff and a plain-English explanation of why it "
             "addresses the root cause."
         ),
+        # get_similar_incidents moved here from the investigator -- it
+        # returns a past diagnosis AND the fix proposed for it, and a
+        # past fix is more directly actionable for "what should THIS
+        # fix look like" than for diagnosing root cause, which the
+        # investigator already does well from reading code alone.
+        tools=[GetSimilarIncidentsTool()],
         llm=LLM_MODEL,
         verbose=False,
     )
@@ -264,6 +271,10 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
 
     fix_task = Task(
         description=(
+            "First, call get_similar_incidents with the root cause "
+            "hypothesis text -- if a similar past incident has a fix "
+            "that worked, treat it as a lead worth considering, not "
+            "something to copy blindly.\n\n"
             "Based on the root cause hypothesis -- if more than one was "
             "ranked, use only the highest-confidence one -- draft a "
             "specific, minimal suggested fix as a code diff against the ACTUAL "

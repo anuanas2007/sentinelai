@@ -148,10 +148,20 @@ function IncidentModal({ incident, view, onClose }) {
     )
   }
 
-  // fixer
-  const fix = incident.fixerEvents[0]
+  // fixer -- fixerEvents can now also contain a get_similar_incidents
+  // tool_call (the tool moved here from the investigator), so the
+  // actual fix text has to be found specifically, not assumed to be
+  // whichever event arrived first.
+  const toolCalls = incident.fixerEvents.filter((e) => e.type === 'tool_call')
+  const fix = incident.fixerEvents.find((e) => e.type === 'stage_complete' || e.type === 'ai_analysis_failed')
   return (
     <Modal title={`Fix proposal: ${incident.incident_event}`} onClose={onClose}>
+      {toolCalls.map((e, i) => (
+        <div key={i} className="modal-tool-call">
+          <strong>{e.tool}</strong>({e.input || ''})
+          <pre className="tool-output">{e.output}</pre>
+        </div>
+      ))}
       <AiOutput text={fix?.output || fix?.error} />
       <RatingButtons incidentId={incident.id} />
     </Modal>

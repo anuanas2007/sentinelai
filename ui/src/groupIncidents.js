@@ -39,7 +39,15 @@ export function groupIncidents(pipelineEvents) {
         incident.status = 'investigating'
         break
       case 'tool_call':
-        incident.investigatorEvents.push(e)
+        // get_similar_incidents lives on the fixer agent now, not the
+        // investigator -- route by which tool was actually called,
+        // not a blanket assumption that all tool calls are
+        // investigation. Every other tool stays investigator-only.
+        if (e.tool === 'get_similar_incidents') {
+          incident.fixerEvents.push(e)
+        } else {
+          incident.investigatorEvents.push(e)
+        }
         break
       case 'stage_complete':
         if (e.stage?.startsWith('Investigation')) {
