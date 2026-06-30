@@ -34,10 +34,17 @@ function ActivityColumn({ events }) {
 }
 
 function detectorStatus(incident) {
+  // Mirrors the same distinction fixed in log_collector.py's print
+  // output: ai_worthy + not requires_ai can mean two genuinely
+  // different things -- "hasn't crossed the incident threshold yet"
+  // (severity stays "warning", AI was never even attempted) vs.
+  // "crossed the threshold, but the 120s dispatch cooldown is still
+  // active from a recent call" -- previously this UI conflated both
+  // into one vague "not dispatched" label.
+  if (!incident.ai_worthy) return { text: 'not AI-worthy', cls: 'muted' }
   if (incident.requires_ai) return { text: 'sent to AI', cls: 'ok' }
-  if (incident.ai_worthy && incident.status !== 'detected') return { text: 'AI-worthy', cls: 'ok' }
-  if (incident.ai_worthy) return { text: 'AI-worthy, not dispatched', cls: 'warn' }
-  return { text: 'not AI-worthy', cls: 'muted' }
+  if (incident.severity === 'warning') return { text: 'below threshold', cls: 'muted' }
+  return { text: 'AI cooldown', cls: 'warn' }
 }
 
 function DetectorColumn({ incidents, onExpand }) {

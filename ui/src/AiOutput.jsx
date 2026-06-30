@@ -13,15 +13,19 @@ export function AiOutput({ text }) {
     <div className="ai-output">
       <ReactMarkdown
         components={{
-          code({ inline, className, children, ...props }) {
+          code({ className, children, ...props }) {
+            // react-markdown v10 no longer passes an `inline` prop --
+            // a language- className only ever appears on fenced block
+            // code (```python), never on single-backtick inline code,
+            // so its presence is what actually distinguishes them now.
             const match = /language-(\w+)/.exec(className || '')
-            if (inline) {
+            if (!match) {
               return <code className="inline-code" {...props}>{children}</code>
             }
             return (
               <SyntaxHighlighter
                 style={oneDark}
-                language={match ? match[1] : 'text'}
+                language={match[1]}
                 PreTag="div"
                 customStyle={{ borderRadius: '6px', fontSize: '12px', margin: '8px 0' }}
               >
