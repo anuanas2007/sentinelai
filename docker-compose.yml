@@ -86,6 +86,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - CHROMA_HOST=chromadb
       - CHROMA_PORT=8000
+      - TARGET_BASE_URL=http://target-app:8000
     volumes:
       - log-data:/app/logs:ro
       # Read-only access to the app's source for the retrieval agent.

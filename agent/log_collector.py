@@ -6,7 +6,7 @@ import threading
 import uuid
 from collections import deque
 from typing import Optional
-from error_detector import ErrorDetector, Incident
+from error_detector import ErrorDetector, Incident, WINDOW_SECONDS
 import ai_engine
 import redis_store
 import events
@@ -94,14 +94,33 @@ def _build_incident_summary(incident: Incident) -> str:
     lines = [
         app_context,
         "",
-        f"Event: {incident.trigger_event.event}",
+        f"Event: {event_name}",
         f"Severity: {incident.severity}",
         f"Errors in window: {incident.error_count}",
     ]
-    if incident.pattern:
+
+    if incident.pattern and incident.cascade_peer_event:
+        # Include both events' context so the AI can reason about causality,
+        # not just the downstream event in isolation.
+        upstream = incident.cascade_peer_event
+        lines.append(f"")
+        lines.append(f"Cascade pattern confirmed: {incident.pattern}")
+        lines.append(f"This pair has been observed co-occurring 3+ times within {WINDOW_SECONDS}s.")
+        lines.append(f"")
+        lines.append(f"Upstream event: {upstream.event}")
+        if upstream.context:
+            lines.append(f"  Context: {upstream.context}")
+        lines.append(f"Downstream event: {event_name}")
+        if incident.trigger_event.context:
+            lines.append(f"  Context: {incident.trigger_event.context}")
+    elif incident.pattern:
         lines.append(f"Cascade pattern: {incident.pattern}")
-    if incident.trigger_event.context:
-        lines.append(f"Event context: {incident.trigger_event.context}")
+        if incident.trigger_event.context:
+            lines.append(f"Event context: {incident.trigger_event.context}")
+    else:
+        if incident.trigger_event.context:
+            lines.append(f"Event context: {incident.trigger_event.context}")
+
     lines.append("Recent log lines:")
     for entry in incident.context_window[-10:]:
         lines.append(f"  [{entry.get('level', 'info').upper()}] {entry.get('event', '')}")

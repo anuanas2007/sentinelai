@@ -91,9 +91,6 @@ THRESHOLD_ERRORS = {
 #     circuit breaker between two pieces of code that both exist but
 #     don't talk to each other -- discoverable by reading main.py, not
 #     by investigating why fake_email_service itself is unreliable.
-# A confirmed cascade is also AI-worthy regardless of which events
-# it involves — "is this real causation or coincidence" is itself a
-# genuine hypothesis question, not something the detector can answer.
 # ============================================================
 AI_WORTHY_EVENTS = {
     "negative_balance_detected",
@@ -163,6 +160,7 @@ class Incident:
                              # ignoring cooldown? lets callers distinguish
                              # "never AI-worthy" from "AI-worthy but
                              # suppressed by cooldown this time"
+    cascade_peer_event: Optional["ErrorEvent"] = None  # upstream event when cascade confirmed
 
 
 class ErrorDetector:
@@ -243,8 +241,8 @@ class ErrorDetector:
         The same pair appearing 3+ times is a pattern — one is causing the other.
         Single occurrences are noise. Repeated patterns are signal.
 
-        This is the same principle behind time-series anomaly detection —
-        never trust a single data point.
+        AI determines whether a confirmed cascade is real causation or coincidence —
+        the detector's job is just to surface the pattern reliably.
         """
         if not self.last_error:
             return None
@@ -254,12 +252,17 @@ class ErrorDetector:
         if time_diff <= 30 and self.last_error.event != current.event:
             pattern = f"{self.last_error.event} → {current.event}"
 
-            # Increment occurrence count for this pair
-            self.cascade_counts[pattern] += 1
+            # Canonical key treats A→B and B→A as the same pair so both
+            # directions count toward the same threshold and share a cooldown.
+            # Without this, concurrent bursts that sometimes fire A first and
+            # sometimes B first confirm two separate cascades and dispatch two
+            # separate AI calls for the exact same event pair.
+            canonical = " ↔ ".join(sorted([self.last_error.event, current.event]))
 
-            # Only confirm after seen 3+ times
-            if self.cascade_counts[pattern] >= CASCADE_CONFIRMATION_THRESHOLD:
-                self.confirmed_cascades.add(pattern)
+            self.cascade_counts[canonical] += 1
+
+            if self.cascade_counts[canonical] >= CASCADE_CONFIRMATION_THRESHOLD:
+                self.confirmed_cascades.add(canonical)
                 return pattern
 
         return None
@@ -287,7 +290,10 @@ class ErrorDetector:
         if not self._requires_ai(event_name, cascade):
             return False
 
-        key = cascade if cascade else event_name
+        if cascade:
+            key = " ↔ ".join(sorted([p.strip() for p in cascade.split("→")]))
+        else:
+            key = event_name
         last_call = self.last_ai_call.get(key)
 
         if last_call is not None and wall_time - last_call < AI_COOLDOWN_SECONDS:
@@ -308,6 +314,8 @@ class ErrorDetector:
         """
         self.immediate_count += 1
         self.incident_count += 1
+        # Capture upstream event BEFORE _detect_cascade runs (it reads self.last_error)
+        upstream = self.last_error
         cascade = self._detect_cascade(error_event)
         ai_worthy = self._requires_ai(error_event.event, cascade)
 
@@ -319,7 +327,8 @@ class ErrorDetector:
             pattern=cascade,
             context_window=context_window,
             requires_ai=ai_worthy and self._should_call_ai(error_event.event, cascade, error_event.wall_time),
-            ai_worthy=ai_worthy
+            ai_worthy=ai_worthy,
+            cascade_peer_event=upstream if cascade else None,
         )
 
     def _handle_threshold(
@@ -334,6 +343,8 @@ class ErrorDetector:
         now = time.time()
         self.error_window.append(now)
         error_count = self._current_error_rate()
+        # Capture upstream event BEFORE _detect_cascade runs (it reads self.last_error)
+        upstream = self.last_error
         cascade = self._detect_cascade(error_event)
 
         if error_count >= INCIDENT_THRESHOLD:
@@ -348,7 +359,8 @@ class ErrorDetector:
                 pattern=cascade,
                 context_window=context_window,
                 requires_ai=ai_worthy and self._should_call_ai(error_event.event, cascade, error_event.wall_time),
-                ai_worthy=ai_worthy
+                ai_worthy=ai_worthy,
+                cascade_peer_event=upstream if cascade else None,
             )
         elif error_count >= WARNING_THRESHOLD:
             return Incident(
@@ -359,7 +371,8 @@ class ErrorDetector:
                 pattern=cascade,
                 context_window=context_window,
                 requires_ai=False,  # warning — watch but don't invoke AI yet
-                ai_worthy=self._requires_ai(error_event.event, cascade)
+                ai_worthy=self._requires_ai(error_event.event, cascade),
+                cascade_peer_event=upstream if cascade else None,
             )
         return None
 
