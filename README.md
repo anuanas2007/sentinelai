@@ -2,6 +2,8 @@
 
 **An AI agent that watches a live, running application and debugs it the way a senior engineer would.** Not just catching errors, but reasoning about why they happened, reading the actual source code to find root cause, and proposing a reviewable fix. Never auto-applies anything.
 
+![SentinelAI live UI](docs/live-ui.png)
+
 ## What it actually does
 
 1. **Watches** a target application's structured logs in real time, completely decoupled from it (no shared code, no Docker socket access; only a log file and a thin HTTP layer).

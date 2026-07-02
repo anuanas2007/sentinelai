@@ -154,7 +154,7 @@ class GetSimilarIncidentsTool(BaseTool):
 
     def _run(self, incident_summary: str) -> str:
         try:
-            matches = vector_memory.query_similar(incident_summary)
+            matches = vector_memory.query_similar(incident_summary, n_results=1)
         except Exception as e:
             result = f"Could not retrieve similar incidents: {e}"
             events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
@@ -163,13 +163,13 @@ class GetSimilarIncidentsTool(BaseTool):
             result = "No similar past incidents found (or none have been analyzed yet)."
             events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
             return result
-        lines = []
+        parts = []
         for m in matches:
-            lines.append(
-                f"- Past incident ({m['event']}): {m['diagnosis']}\n"
-                f"  Fix proposed at the time: {m['fix_proposal']}"
+            parts.append(
+                f"## Past fix for a similar incident ({m['event']})\n\n"
+                f"{m['fix_proposal']}"
             )
-        result = "\n".join(lines)
+        result = "\n\n---\n\n".join(parts)
         events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
         return result
 
@@ -241,6 +241,16 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "concluding -- don't stop at the first file if the real "
             "mechanism lives in a function call you haven't actually seen "
             "the body of.\n\n"
+            "IMPORTANT — if the incident summary includes a confirmed cascade "
+            "pattern, the very first line of your entire response MUST be "
+            "exactly one of these two:\n"
+            "  Cascade verdict: YES\n"
+            "  Cascade verdict: NO\n"
+            "YES = there is a real code path where the upstream event causes "
+            "the downstream event. NO = both events fire independently from "
+            "the same root condition and neither causes the other. "
+            "Do not skip this line. Do not bury it. It is the first thing "
+            "you write. Then explain your reasoning.\n\n"
             "Using ONLY what you actually read, determine the most likely "
             "root cause. Be specific about the exact mechanism -- name the "
             "precise sequence of operations that goes wrong (e.g. 'X reads "
