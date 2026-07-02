@@ -69,6 +69,8 @@ services:
 
   sentinel-agent:
     build: ./agent
+    ports:
+      - "9000:9000"
     depends_on:
       target-app:
         condition: service_started
@@ -100,6 +102,13 @@ services:
       - TARGET_BASE_URL=http://target-app:8000
       - WORKERS=50
       - DURATION_SECONDS=30
+
+  ui:
+    build: ./ui
+    ports:
+      - "5173:80"
+    depends_on:
+      - sentinel-agent
 
 volumes:
   log-data:

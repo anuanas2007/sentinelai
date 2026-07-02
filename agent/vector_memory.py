@@ -56,7 +56,7 @@ def _get_embedding_model() -> SentenceTransformer:
     return _embedding_model
 
 
-def store_incident(event_name: str, incident_summary: str, diagnosis: str, fix_proposal: str) -> None:
+def store_incident(incident_id: str, event_name: str, incident_summary: str, diagnosis: str, fix_proposal: str) -> None:
     """
     Called once per completed investigation, after both the
     investigator and fix-proposal agents have finished -- not on every
@@ -64,13 +64,24 @@ def store_incident(event_name: str, incident_summary: str, diagnosis: str, fix_p
     ai_engine.py). Stores both, not just the diagnosis -- a future
     similar incident benefits from "here's what was wrong AND what was
     suggested last time," not just the diagnosis alone.
+
+    incident_id is the SAME short id log_collector.py generated at
+    detection time and threaded through every pipeline event for this
+    incident -- previously this function generated its own id
+    (event_name:timestamp), a second, disconnected id scheme for the
+    same incident. Unified so a UI can rate a specific incident (via
+    rate_incident() below) using the id it already has, instead of
+    needing to know about a second internal id it never sees.
+
+    upsert, not add -- defensive against the unlikely case of this
+    being called twice for the same id (e.g. a retry); add() would
+    raise on a duplicate id, upsert() just overwrites cleanly.
     """
     collection = _get_collection()
     model = _get_embedding_model()
     embedding = model.encode(incident_summary).tolist()
-    incident_id = f"{event_name}:{time.time()}"
 
-    collection.add(
+    collection.upsert(
         ids=[incident_id],
         embeddings=[embedding],
         documents=[diagnosis],
@@ -108,3 +119,28 @@ def query_similar(incident_summary: str, n_results: int = 3) -> list[dict]:
             "distance": dist,
         })
     return matches
+
+
+def rate_incident(incident_id: str, rating: str, note: str = "") -> bool:
+    """
+    Records a human's correctness judgment on a stored diagnosis/fix --
+    this IS the outcome-tracking data the learned classifier and
+    fix-accuracy benchmarking have both been blocked on, captured as a
+    side effect of normal review instead of a separate labeling chore.
+    Returns False if incident_id doesn't exist (nothing to rate).
+
+    Reads existing metadata and writes back the full dict with rating
+    fields merged in, rather than relying on collection.update() to
+    merge partial metadata on its own -- safer not to assume that
+    behavior without verifying it, since getting it wrong would
+    silently wipe the existing event/diagnosis/fix_proposal fields.
+    """
+    collection = _get_collection()
+    existing = collection.get(ids=[incident_id])
+    if not existing["ids"]:
+        return False
+    metadata = existing["metadatas"][0]
+    metadata["rating"] = rating
+    metadata["rating_note"] = note
+    collection.update(ids=[incident_id], metadatas=[metadata])
+    return True

@@ -31,6 +31,7 @@ from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
 import redis_store
 import vector_memory
+import events
 
 # Mounted read-only into the container — toy-scale simplification.
 # See docs/SECOND_ITERATION_ARCHITECTURE.md for why this doesn't scale
@@ -38,6 +39,13 @@ import vector_memory
 TARGET_APP_SRC = os.environ.get("TARGET_APP_SRC", "/app/target_app_src")
 
 LLM_MODEL = "gpt-4o-mini"  # cheap model — root cause text generation, not heavy code synthesis
+
+# Set at the start of each analyze_incident() call, read by every tool's
+# _run() and the stage callback below to tag their events with the
+# incident that triggered this run. Safe as a module-level variable
+# (not per-call state) only because ai_worker_loop processes incidents
+# strictly one at a time -- see log_collector.py.
+_current_incident_id: str = ""
 
 
 class ListSourceFilesTool(BaseTool):
@@ -52,8 +60,12 @@ class ListSourceFilesTool(BaseTool):
         try:
             names = sorted(os.listdir(TARGET_APP_SRC))
         except OSError as e:
-            return f"Could not list source directory: {e}"
-        return "\n".join(n for n in names if n.endswith(".py")) or "No .py files found"
+            result = f"Could not list source directory: {e}"
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="list_source_files", input="", output=result)
+            return result
+        result = "\n".join(n for n in names if n.endswith(".py")) or "No .py files found"
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="list_source_files", input="", output=result)
+        return result
 
 
 class ReadSourceFileTool(BaseTool):
@@ -74,9 +86,16 @@ class ReadSourceFileTool(BaseTool):
         safe_name = os.path.basename(filename)
         path = os.path.join(TARGET_APP_SRC, safe_name)
         if not os.path.isfile(path):
-            return f"File not found: {safe_name}"
+            result = f"File not found: {safe_name}"
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="read_source_file", input=filename, output=result)
+            return result
         with open(path, "r") as f:
-            return f.read()
+            content = f.read()
+        # Full content goes back to the model; the event log only gets a
+        # preview, so the live feed doesn't balloon with entire files.
+        preview = content[:1000] + ("... [truncated]" if len(content) > 1000 else "")
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="read_source_file", input=filename, output=preview)
+        return content
 
 
 class _IncidentHistoryArgs(BaseModel):
@@ -99,15 +118,20 @@ class GetIncidentHistoryTool(BaseTool):
     def _run(self, event_name: str, hours: float = 24) -> str:
         try:
             count = redis_store.count_in_window(event_name, hours=hours)
+            result = f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
         except Exception as e:
-            return f"Could not retrieve incident history: {e}"
-        return f"'{event_name}' has occurred {count} time(s) in the last {hours} hour(s), including this one."
+            result = f"Could not retrieve incident history: {e}"
+        events.push_pipeline_event(
+            "tool_call", incident_id=_current_incident_id, tool="get_incident_history",
+            input=f"{event_name} (last {hours}h)", output=result,
+        )
+        return result
 
 
 class _SimilarIncidentsArgs(BaseModel):
     incident_summary: str = Field(
         ...,
-        description="The full incident description you were given for this task -- pass it verbatim."
+        description="The root cause hypothesis text -- pass it verbatim, not a paraphrase."
     )
 
 
@@ -119,11 +143,12 @@ class GetSimilarIncidentsTool(BaseTool):
         "which only matches the exact same event name. Each result "
         "includes a past diagnosis AND the fix that was proposed for it. "
         "This is precedent, not proof -- a similar-looking past incident "
-        "isn't necessarily the same root cause this time. Use it as a "
-        "lead worth checking against the actual code you read, never as "
-        "a substitute for reading it. Returns nothing if no past "
-        "incidents have been analyzed yet -- that's a normal cold-start "
-        "state, not an error."
+        "isn't necessarily the same root cause this time, and its fix "
+        "may not transfer directly. Use it as a lead to consider "
+        "alongside the actual retrieved file content, never as a "
+        "substitute for it. Returns nothing if no past incidents have "
+        "been analyzed yet -- that's a normal cold-start state, not an "
+        "error."
     )
     args_schema: type[BaseModel] = _SimilarIncidentsArgs
 
@@ -131,16 +156,22 @@ class GetSimilarIncidentsTool(BaseTool):
         try:
             matches = vector_memory.query_similar(incident_summary)
         except Exception as e:
-            return f"Could not retrieve similar incidents: {e}"
+            result = f"Could not retrieve similar incidents: {e}"
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            return result
         if not matches:
-            return "No similar past incidents found (or none have been analyzed yet)."
+            result = "No similar past incidents found (or none have been analyzed yet)."
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            return result
         lines = []
         for m in matches:
             lines.append(
                 f"- Past incident ({m['event']}): {m['diagnosis']}\n"
                 f"  Fix proposed at the time: {m['fix_proposal']}"
             )
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
+        return result
 
 
 def _stage_callback(stage_label: str):
@@ -155,6 +186,7 @@ def _stage_callback(stage_label: str):
         print("-" * 60)
         print(text)
         print("-" * 60, flush=True)
+        events.push_pipeline_event("stage_complete", incident_id=_current_incident_id, stage=stage_label, output=text)
     return callback
 
 
@@ -174,7 +206,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "honestly; if the evidence is ambiguous, say so rather than "
             "overclaiming."
         ),
-        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool(), GetSimilarIncidentsTool()],
+        tools=[ListSourceFilesTool(), ReadSourceFileTool(), GetIncidentHistoryTool()],
         llm=LLM_MODEL,
         verbose=False,
     )
@@ -188,6 +220,12 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "specific code diff and a plain-English explanation of why it "
             "addresses the root cause."
         ),
+        # get_similar_incidents moved here from the investigator -- it
+        # returns a past diagnosis AND the fix proposed for it, and a
+        # past fix is more directly actionable for "what should THIS
+        # fix look like" than for diagnosing root cause, which the
+        # investigator already does well from reading code alone.
+        tools=[GetSimilarIncidentsTool()],
         llm=LLM_MODEL,
         verbose=False,
     )
@@ -233,6 +271,10 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
 
     fix_task = Task(
         description=(
+            "First, call get_similar_incidents with the root cause "
+            "hypothesis text -- if a similar past incident has a fix "
+            "that worked, treat it as a lead worth considering, not "
+            "something to copy blindly.\n\n"
             "Based on the root cause hypothesis -- if more than one was "
             "ranked, use only the highest-confidence one -- draft a "
             "specific, minimal suggested fix as a code diff against the ACTUAL "
@@ -264,7 +306,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
     return crew, investigator_task
 
 
-def analyze_incident(incident_summary: str, event_name: str) -> str:
+def analyze_incident(incident_summary: str, event_name: str, incident_id: str = "") -> str:
     """
     Runs the investigator -> fix-proposal crew on one incident.
     Blocking call — meant to be run from a background thread/queue
@@ -273,8 +315,13 @@ def analyze_incident(incident_summary: str, event_name: str) -> str:
 
     event_name is only used for vector_memory storage afterward, not
     passed into the crew itself — the investigator already gets the
-    event name as part of incident_summary.
+    event name as part of incident_summary. incident_id is similarly
+    not passed into the crew -- it's read by the tools/stage callback
+    via the module-level _current_incident_id, set here.
     """
+    global _current_incident_id
+    _current_incident_id = incident_id
+
     crew, investigator_task = _build_crew(incident_summary)
     result = crew.kickoff()
 
@@ -282,7 +329,7 @@ def analyze_incident(incident_summary: str, event_name: str) -> str:
     # take down the whole analysis the caller is waiting on.
     try:
         diagnosis = investigator_task.output.raw
-        vector_memory.store_incident(event_name, incident_summary, diagnosis, str(result))
+        vector_memory.store_incident(incident_id, event_name, incident_summary, diagnosis, str(result))
     except Exception as e:
         print(f"⚠️  [SentinelAI] Could not store incident in vector memory: {e}", flush=True)
 

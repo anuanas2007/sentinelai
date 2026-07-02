@@ -105,9 +105,16 @@ AI_WORTHY_EVENTS = {
     "email_service_unreachable",
 }
 
-# Thresholds for probabilistic errors
-WARNING_THRESHOLD = 3    # errors in window = worth watching
-INCIDENT_THRESHOLD = 5   # errors in window = invoke AI
+# Thresholds for probabilistic errors. Lowered from 3/5 -- the original
+# values left every single occurrence below 3 completely silent (no
+# detector response at all until the 3rd), which made the live UI feel
+# unresponsive during testing/demos. 1/3 means the very first
+# occurrence is at least visible as a warning, and 3 still matches the
+# "two could be coincidence, three is a pattern" reasoning already used
+# for CASCADE_CONFIRMATION_THRESHOLD below -- not an arbitrarily chosen
+# number, the same logic just applied consistently to AI dispatch too.
+WARNING_THRESHOLD = 1    # errors in window = worth watching
+INCIDENT_THRESHOLD = 3   # errors in window = invoke AI
 WINDOW_SECONDS = 60      # sliding window size
 CASCADE_CONFIRMATION_THRESHOLD = 3
 
