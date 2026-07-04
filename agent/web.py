@@ -25,7 +25,7 @@ import vector_memory
 
 TARGET_BASE_URL = os.environ.get("TARGET_BASE_URL", "http://localhost:8000")
 
-VALID_SCENARIOS = {"analytics_crash", "external_timeout", "user_not_found", "negative_balance", "payment_cascade"}
+VALID_SCENARIOS = {"analytics_crash", "external_timeout", "user_not_found", "negative_balance", "payment_cascade", "admin_topup", "admin_restock"}
 
 # Module-level task set prevents GC of fire-and-forget scenario tasks.
 _scenario_tasks: set = set()
@@ -38,6 +38,9 @@ async def _fire_scenario(
     calls: int | None = None,
     user_id: int | None = None,
     concurrent: int | None = None,
+    top_up: float | None = None,
+    item_name: str | None = None,
+    quantity: int | None = None,
 ) -> None:
     async with httpx.AsyncClient(timeout=15.0) as client:
         if scenario_id == "analytics_crash":
@@ -62,6 +65,11 @@ async def _fire_scenario(
         elif scenario_id == "negative_balance":
             uid = user_id or 1
             n = concurrent or 30
+            if top_up:
+                await client.post(
+                    f"{TARGET_BASE_URL}/admin/topup",
+                    json={"user_id": uid, "amount": top_up},
+                )
             await asyncio.gather(
                 *[
                     client.post(
@@ -71,6 +79,20 @@ async def _fire_scenario(
                     for _ in range(n)
                 ],
                 return_exceptions=True,
+            )
+        elif scenario_id == "admin_topup":
+            uid = user_id or 1
+            amount = top_up or 500.0
+            await client.post(
+                f"{TARGET_BASE_URL}/admin/topup",
+                json={"user_id": uid, "amount": amount},
+            )
+        elif scenario_id == "admin_restock":
+            name = item_name or "item_a"
+            qty = quantity or 100
+            await client.post(
+                f"{TARGET_BASE_URL}/admin/restock",
+                json={"item_name": name, "quantity": qty},
             )
         elif scenario_id == "payment_cascade":
             n = concurrent or 80
@@ -203,6 +225,9 @@ class TriggerRequest(BaseModel):
     calls: int | None = None
     user_id: int | None = None
     concurrent: int | None = None
+    top_up: float | None = None
+    item_name: str | None = None
+    quantity: int | None = None
 
 
 @app.post("/api/trigger/{scenario_id}")
@@ -210,7 +235,9 @@ async def trigger_scenario(scenario_id: str, body: TriggerRequest = Body(default
     if scenario_id not in VALID_SCENARIOS:
         return {"status": "unknown_scenario"}
     b = body or TriggerRequest()
-    task = asyncio.create_task(_fire_scenario(scenario_id, b.calls, b.user_id, b.concurrent))
+    task = asyncio.create_task(
+        _fire_scenario(scenario_id, b.calls, b.user_id, b.concurrent, b.top_up, b.item_name, b.quantity)
+    )
     _scenario_tasks.add(task)
     task.add_done_callback(_scenario_tasks.discard)
     return {"status": "triggered", "scenario": scenario_id}
