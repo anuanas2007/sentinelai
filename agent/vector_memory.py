@@ -121,8 +121,9 @@ def query_similar(event_name: str, n_results: int = 3) -> list[dict]:
             "event": meta.get("event"),
             "diagnosis": doc,
             "fix_proposal": meta.get("fix_proposal"),
+            "incident_summary": meta.get("incident_summary"),
             "distance": dist,
-            "rating": meta.get("rating"),  # None if never rated
+            "rating": meta.get("rating"),
         })
     return matches
 

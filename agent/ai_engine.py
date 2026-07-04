@@ -140,17 +140,14 @@ class _SimilarIncidentsArgs(BaseModel):
 class GetSimilarIncidentsTool(BaseTool):
     name: str = "get_similar_incidents"
     description: str = (
-        "Returns past incidents that looked SIMILAR to this one, even if "
-        "they were a different event type -- unlike get_incident_history, "
-        "which only matches the exact same event name. Each result "
-        "includes a past diagnosis AND the fix that was proposed for it. "
-        "This is precedent, not proof -- a similar-looking past incident "
-        "isn't necessarily the same root cause this time, and its fix "
-        "may not transfer directly. Use it as a lead to consider "
-        "alongside the actual retrieved file content, never as a "
-        "substitute for it. Returns nothing if no past incidents have "
-        "been analyzed yet -- that's a normal cold-start state, not an "
-        "error."
+        "Returns the fix that was proposed for a past incident of the same "
+        "type, along with brief context about that past incident so you can "
+        "judge whether it was actually the same issue. "
+        "IMPORTANT: read the context carefully before using the fix. If the "
+        "past incident was a different root cause or a different scenario, "
+        "say so explicitly and do not use that fix. Only treat it as a lead "
+        "if the past incident genuinely matches the current one. "
+        "Returns nothing if no past incidents have been analyzed yet."
     )
     args_schema: type[BaseModel] = _SimilarIncidentsArgs
 
@@ -177,8 +174,22 @@ class GetSimilarIncidentsTool(BaseTool):
         best = matches[0]
 
         rating_label = best.get("rating") or "unrated"
+
+        # Pull a few lines of context from the stored incident summary so
+        # the fixer can judge whether the past incident is actually the same
+        # issue before deciding to use the fix.
+        past_summary = best.get("incident_summary") or ""
+        context_lines = [
+            l for l in past_summary.splitlines()
+            if any(l.startswith(p) for p in ("Event:", "Severity:", "Event context:", "Cascade", "Upstream", "Downstream"))
+        ]
+        context_snippet = "\n".join(context_lines[:6]) if context_lines else f"Event: {best['event']}"
+
         result = (
-            f"## Past fix for a similar incident ({best['event']}) — rated: {rating_label}\n\n"
+            f"## Past fix for a similar incident — rated: {rating_label}\n\n"
+            f"**Past incident context** (judge whether this matches your current incident before using the fix):\n"
+            f"{context_snippet}\n\n"
+            f"**Past fix proposal:**\n"
             f"{best['fix_proposal']}"
         )
         events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=event_name, output=result)
