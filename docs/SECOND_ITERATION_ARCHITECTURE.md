@@ -490,6 +490,22 @@ The dashboard panels were chosen specifically because they answer questions abou
 
 Anonymous viewer access enabled by default (no login required to view, admin/admin to edit) — single-user local demo, not a multi-tenant deployment, same rationale as the wide-open CORS on the agent.
 
+The dashboard is also embedded directly in the live UI as a **Metrics** tab (Live / Metrics switcher in the header). Grafana blocks iframe embedding by default (`X-Frame-Options: deny`) — requires `GF_SECURITY_ALLOW_EMBEDDING=true` to allow it. The iframe uses `?kiosk` mode to hide Grafana's own navbar so it reads as part of the SentinelAI UI rather than a separate app embedded inside it.
+
+**Data retention across all storage layers:**
+
+| Layer | What | Retention |
+|---|---|---|
+| events.py (in-memory) | SSE pipeline events (UI feed) | Last 500 events — lost on container restart |
+| events.py (in-memory) | Activity feed events | Last 300 events — lost on container restart |
+| Redis | Incident history (`get_incident_history` tool) | 24 hours, auto-expired |
+| ChromaDB | Vector memory — diagnoses + fix proposals | Forever — `chroma-data` Docker volume |
+| Prometheus | All metrics | 15 days (default) — persists in its own volume |
+| Grafana | Dashboard config | Forever — `grafana-data` Docker volume |
+| Log ring buffer | Raw log lines (in-memory) | Last 100 lines — lost on restart |
+
+The key gap: SSE events are in-memory only. If the agent container restarts, the Live tab starts blank even though incidents are still in Redis and ChromaDB. The UI has no mechanism to replay from persistent storage on reconnect — a known limitation, not an oversight.
+
 ### Vector memory retrieval: prioritising correct-rated fixes
 
 `get_similar_incidents` originally returned purely the closest match by cosine distance — a correctly-rated past fix could lose to a slightly-more-similar incorrectly-rated one. Changed to: query top 3 by similarity, filter out any with cosine distance > 0.5 (too dissimilar to be useful precedent), re-rank remaining by rating priority (correct → unrated → partial → incorrect), return the best one. The tool output now includes the rating label so the fixer knows how much to trust it. The 0.5 threshold means a cold memory with no similar incidents returns nothing rather than a misleading near-miss.

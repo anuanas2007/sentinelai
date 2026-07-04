@@ -75,10 +75,22 @@ curl -X POST localhost:8000/admin/restock -H "Content-Type: application/json" -d
 
 ## Observability
 
-- **Live UI** — `http://localhost:5173` — 4-column pipeline view (activity, detector, investigator, fixer)
-- **Grafana** — `http://localhost:3000` — AI pipeline metrics dashboard (detection funnel, fix accuracy, pipeline latency, cascade analysis, vector memory hit rate)
+- **Live UI** — `http://localhost:5173` — 4-column pipeline view (activity, detector, investigator, fixer). Has a **Metrics** tab in the header that embeds the Grafana dashboard inline.
+- **Grafana** — `http://localhost:3000` — AI pipeline metrics dashboard (detection funnel, fix accuracy, pipeline latency, cascade analysis, vector memory hit rate). Also accessible via the Metrics tab in the live UI.
 - **Prometheus** — `http://localhost:9090` — raw metrics, scraped from `sentinel-agent:9000/metrics` every 15s
 - **Agent logs** — `docker compose logs -f sentinel-agent`
+
+## Data retention
+
+| Layer | What | Retention |
+|---|---|---|
+| events.py (in-memory) | SSE pipeline events (UI feed) | Last 500 events — lost on container restart |
+| events.py (in-memory) | Activity feed events | Last 300 events — lost on container restart |
+| Redis | Incident history (`get_incident_history` tool) | 24 hours, auto-expired |
+| ChromaDB | Vector memory — diagnoses + fix proposals | Forever — persists in `chroma-data` Docker volume |
+| Prometheus | All metrics | 15 days (default) — persists in its own volume |
+| Grafana | Dashboard config | Forever — persists in `grafana-data` Docker volume |
+| Log ring buffer | Raw log lines (in-memory) | Last 100 lines — lost on restart |
 
 ## How to watch it happen
 

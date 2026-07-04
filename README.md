@@ -86,7 +86,7 @@ docker compose up --build
 ```
 
 - Target app: `http://localhost:8000`
-- Live UI: `http://localhost:5173`
+- Live UI: `http://localhost:5173` — use the **Metrics** tab in the header to view the Grafana dashboard inline
 - Agent API: `http://localhost:9000`
 - Grafana: `http://localhost:3000` (login: admin / admin)
 - Prometheus: `http://localhost:9090`
