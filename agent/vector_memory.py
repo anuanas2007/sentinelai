@@ -79,11 +79,11 @@ def store_incident(incident_id: str, event_name: str, incident_summary: str, dia
     """
     collection = _get_collection()
     model = _get_embedding_model()
-    # Embed just the event name — it's the clearest signal for "find a past
-    # incident of the same type." Embedding the diagnosis would match current
-    # root cause text against past root cause text, which risks confusing the
-    # fixer with old conclusions rather than helping it find a relevant fix.
-    embedding = model.encode(event_name).tolist()
+    # Embed the incident_summary — it's a structured description of what the
+    # incident looked like (event name, severity, context, log lines). Querying
+    # with just the event name finds past summaries where that event name appears
+    # prominently, so same-type incidents surface first, unrelated ones stay far.
+    embedding = model.encode(incident_summary).tolist()
 
     collection.upsert(
         ids=[incident_id],
@@ -100,13 +100,15 @@ def store_incident(incident_id: str, event_name: str, incident_summary: str, dia
 
 def query_similar(event_name: str, n_results: int = 3) -> list[dict]:
     """
-    Returns up to n_results past fixes whose event names are semantically
-    closest to the one given. Empty list if nothing's been stored yet,
-    not an error -- a cold start is a normal, expected state.
+    Returns up to n_results past fixes for incidents of the same type.
+    Stored embeddings are of incident_summaries; querying with just the
+    event name works because the event name appears prominently at the
+    top of every stored summary, so same-type incidents surface first.
+    Empty list if nothing's been stored yet — normal cold-start state.
     """
     collection = _get_collection()
     model = _get_embedding_model()
-    embedding = model.encode(event_name).tolist()
+    embedding = model.encode(event_name).tolist()  # event name as query, incident_summary as stored
 
     results = collection.query(query_embeddings=[embedding], n_results=n_results)
 
