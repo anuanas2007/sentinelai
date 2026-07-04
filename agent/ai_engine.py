@@ -158,7 +158,7 @@ class GetSimilarIncidentsTool(BaseTool):
         # Similarity threshold: cosine distance > 0.5 means the past
         # incident is too different to be useful precedent. Better to
         # return nothing than to surface a misleading near-miss.
-        MAX_DISTANCE = 0.5
+        MAX_DISTANCE = 0.7
 
         try:
             matches = vector_memory.query_similar(incident_summary, n_results=3)

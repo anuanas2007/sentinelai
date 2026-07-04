@@ -32,6 +32,11 @@ detector = ErrorDetector()
 # ============================================================
 ai_queue: "queue.Queue[tuple[str, Incident]]" = queue.Queue()
 
+# Tracks which canonical cascade pairs have already been counted in the
+# Prometheus metric so we only increment once per unique confirmed pair,
+# not on every subsequent incident that carries the same pattern.
+_metriced_cascades: set = set()
+
 
 BASE_APP_CONTEXT = (
     "The monitored app is a FastAPI service (target_app/main.py) backed by "
@@ -266,9 +271,9 @@ def handle_error(error_entry: dict):
         ).inc()
 
     if incident.pattern:
-        from error_detector import CASCADE_CONFIRMATION_THRESHOLD
         canonical = " ↔ ".join(sorted([p.strip() for p in incident.pattern.split("→")]))
-        if detector.cascade_counts.get(canonical, 0) == CASCADE_CONFIRMATION_THRESHOLD:
+        if canonical in detector.confirmed_cascades and canonical not in _metriced_cascades:
+            _metriced_cascades.add(canonical)
             metrics.cascade_confirmations_total.labels(canonical_pair=canonical).inc()
 
     # Print incident alert
