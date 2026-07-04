@@ -37,10 +37,30 @@ const SCENARIOS = [
     id: 'negative_balance',
     label: 'Negative balance',
     desc: 'Race condition on balance check',
-    explanation: 'Sends many concurrent orders for the same user. The balance check and deduction are not atomic -- multiple orders can pass the check at the same time before any deduct, leaving the balance negative. You will see negative_balance_detected in the activity feed after the orders complete.',
+    explanation: 'Sends many concurrent orders for the same user (item_a, $50 each). The balance check and deduction are not atomic -- multiple orders pass the check simultaneously, overdrawing the balance. Requires item_a to have stock > 0 (use "Add stock" first if needed) and the user to have sufficient balance (use "Add balance" first if needed).',
+    params: [
+      { key: 'user_id', label: 'User ID (1=Alice $500, 3=Charlie $250)', default: 1, min: 1, max: 3 },
+      { key: 'concurrent', label: 'Concurrent orders', default: 30, min: 5, max: 100 },
+    ],
+  },
+  {
+    id: 'admin_topup',
+    label: 'Add balance',
+    desc: 'Top up a user\'s balance',
+    explanation: 'Directly adds balance to a user account. Use this to reset a user after the negative balance scenario has drained them.',
     params: [
       { key: 'user_id', label: 'User ID (1, 2, or 3)', default: 1, min: 1, max: 3 },
-      { key: 'concurrent', label: 'Concurrent orders', default: 30, min: 5, max: 100 },
+      { key: 'top_up', label: 'Amount to add ($)', default: 500, min: 1, max: 9999 },
+    ],
+  },
+  {
+    id: 'admin_restock',
+    label: 'Add stock',
+    desc: 'Restock an item',
+    explanation: 'Directly adds stock to an item. Use this to reset inventory after order scenarios have depleted it.',
+    params: [
+      { key: 'item_name', label: 'Item', type: 'select', default: 'item_a', options: ['item_a', 'item_b', 'item_c'] },
+      { key: 'quantity', label: 'Quantity to add', default: 100, min: 1, max: 9999 },
     ],
   },
   {
@@ -77,14 +97,24 @@ function ScenarioModal({ scenario, onClose }) {
         {scenario.params.map((p) => (
           <div key={p.key} className="scenario-param">
             <label className="scenario-param-label">{p.label}</label>
-            <input
-              className="scenario-param-input"
-              type="number"
-              min={p.min}
-              max={p.max}
-              value={params[p.key]}
-              onChange={(e) => setParams({ ...params, [p.key]: Number(e.target.value) })}
-            />
+            {p.type === 'select' ? (
+              <select
+                className="scenario-param-input"
+                value={params[p.key]}
+                onChange={(e) => setParams({ ...params, [p.key]: e.target.value })}
+              >
+                {p.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+              </select>
+            ) : (
+              <input
+                className="scenario-param-input"
+                type="number"
+                min={p.min}
+                max={p.max}
+                value={params[p.key]}
+                onChange={(e) => setParams({ ...params, [p.key]: Number(e.target.value) })}
+              />
+            )}
           </div>
         ))}
       </div>

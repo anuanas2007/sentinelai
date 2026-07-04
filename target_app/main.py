@@ -149,6 +149,28 @@ class OrderRequest(BaseModel):
     quantity: int
 
 
+class TopupRequest(BaseModel):
+    user_id: int
+    amount: float
+
+
+class RestockRequest(BaseModel):
+    item_name: str
+    quantity: int
+
+
+@app.post("/admin/topup")
+async def admin_topup(req: TopupRequest):
+    new_balance = await db.topup_balance(req.user_id, req.amount)
+    return {"user_id": req.user_id, "new_balance": new_balance}
+
+
+@app.post("/admin/restock")
+async def admin_restock(req: RestockRequest):
+    new_stock = await db.restock_item(req.item_name, req.quantity)
+    return {"item_name": req.item_name, "new_stock": new_stock}
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}

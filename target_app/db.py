@@ -145,3 +145,21 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
             raise DBDeadlock(str(e))
 
     return float(new_balance)
+
+
+async def topup_balance(user_id: int, amount: float) -> float:
+    async with _connection() as conn:
+        new_balance = await conn.fetchval(
+            "UPDATE users SET balance = balance + $1 WHERE id = $2 RETURNING balance",
+            amount, user_id,
+        )
+        return float(new_balance) if new_balance is not None else 0.0
+
+
+async def restock_item(item_name: str, quantity: int) -> int:
+    async with _connection() as conn:
+        new_stock = await conn.fetchval(
+            "UPDATE items SET stock = stock + $1 WHERE name = $2 RETURNING stock",
+            quantity, item_name,
+        )
+        return int(new_stock) if new_stock is not None else 0
