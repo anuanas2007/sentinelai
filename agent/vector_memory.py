@@ -79,7 +79,11 @@ def store_incident(incident_id: str, event_name: str, incident_summary: str, dia
     """
     collection = _get_collection()
     model = _get_embedding_model()
-    embedding = model.encode(incident_summary).tolist()
+    # Embed just the event name — it's the clearest signal for "find a past
+    # incident of the same type." Embedding the diagnosis would match current
+    # root cause text against past root cause text, which risks confusing the
+    # fixer with old conclusions rather than helping it find a relevant fix.
+    embedding = model.encode(event_name).tolist()
 
     collection.upsert(
         ids=[incident_id],
@@ -94,16 +98,15 @@ def store_incident(incident_id: str, event_name: str, incident_summary: str, dia
     )
 
 
-def query_similar(incident_summary: str, n_results: int = 3) -> list[dict]:
+def query_similar(event_name: str, n_results: int = 3) -> list[dict]:
     """
-    Returns up to n_results past diagnoses whose incident summaries are
-    semantically closest to the one given -- regardless of whether they
-    were the same event type. Empty list if nothing's been stored yet,
+    Returns up to n_results past fixes whose event names are semantically
+    closest to the one given. Empty list if nothing's been stored yet,
     not an error -- a cold start is a normal, expected state.
     """
     collection = _get_collection()
     model = _get_embedding_model()
-    embedding = model.encode(incident_summary).tolist()
+    embedding = model.encode(event_name).tolist()
 
     results = collection.query(query_embeddings=[embedding], n_results=n_results)
 
