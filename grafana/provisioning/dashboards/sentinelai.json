@@ -1,0 +1,221 @@
+{
+  "title": "SentinelAI Pipeline",
+  "uid": "sentinelai-pipeline",
+  "version": 1,
+  "schemaVersion": 38,
+  "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Detection Funnel",
+      "description": "How many errors make it through each stage of the pipeline",
+      "type": "bargauge",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 6 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["sum"] },
+        "displayMode": "gradient"
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sentinelai_errors_total[1h]))",
+          "legendFormat": "Errors seen"
+        },
+        {
+          "expr": "sum(increase(sentinelai_incidents_total[1h]))",
+          "legendFormat": "Incidents detected"
+        },
+        {
+          "expr": "sum(increase(sentinelai_ai_dispatches_total[1h]))",
+          "legendFormat": "AI dispatched"
+        },
+        {
+          "expr": "sum(increase(sentinelai_fix_ratings_total[1h]))",
+          "legendFormat": "Fixes rated"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 2,
+      "title": "AI Cooldown Suppressions",
+      "description": "AI dispatch attempts blocked by the 120s cooldown",
+      "type": "stat",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 6 },
+      "options": {
+        "reduceOptions": { "calcs": ["sum"] },
+        "colorMode": "background",
+        "graphMode": "area"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 20 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sentinelai_ai_cooldowns_total[1h]))",
+          "legendFormat": "Suppressions"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 3,
+      "title": "Vector Memory Hit Rate",
+      "description": "How often get_similar_incidents finds a useful past fix",
+      "type": "piechart",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 6 },
+      "options": {
+        "pieType": "donut",
+        "displayLabels": ["name", "percent"]
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(sentinelai_vector_memory_hits_total{found=\"true\"}[1h]))",
+          "legendFormat": "Hit"
+        },
+        {
+          "expr": "sum(increase(sentinelai_vector_memory_hits_total{found=\"false\"}[1h]))",
+          "legendFormat": "Miss"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 4,
+      "title": "Errors by Type (rate/min)",
+      "description": "Error rate per event type over time",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      },
+      "targets": [
+        {
+          "expr": "sum by (event_type) (rate(sentinelai_errors_total[2m])) * 60",
+          "legendFormat": "{{event_type}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 5,
+      "title": "Fix Ratings",
+      "description": "Correct / partial / incorrect ratings over time",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      },
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "correct" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "partial" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "incorrect" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (rating) (increase(sentinelai_fix_ratings_total[5m]))",
+          "legendFormat": "{{rating}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 6,
+      "title": "Pipeline Stage Duration (p50 / p95)",
+      "description": "How long each stage takes — investigation vs fix proposal vs end-to-end",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 14, "w": 16, "h": 8 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["mean", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": { "unit": "s" }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (stage, le) (rate(sentinelai_pipeline_duration_seconds_bucket[5m])))",
+          "legendFormat": "p50 {{stage}}"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (stage, le) (rate(sentinelai_pipeline_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95 {{stage}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 7,
+      "title": "Cascade Confirmations",
+      "description": "Cascade patterns confirmed by the detector",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 14, "w": 8, "h": 8 },
+      "options": {
+        "reduceOptions": { "calcs": ["sum"] },
+        "textMode": "value_and_name",
+        "colorMode": "background"
+      },
+      "targets": [
+        {
+          "expr": "sum by (canonical_pair) (increase(sentinelai_cascade_confirmations_total[1h]))",
+          "legendFormat": "{{canonical_pair}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 8,
+      "title": "Incidents by Severity",
+      "description": "Breakdown of incidents by severity over time",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "calcs": ["sum"] }
+      },
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "immediate" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "critical" }, "properties": [{ "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "warning" }, "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "expr": "sum by (severity) (increase(sentinelai_incidents_total[2m]))",
+          "legendFormat": "{{severity}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    },
+    {
+      "id": 9,
+      "title": "AI Fix Accuracy (all time)",
+      "description": "Cumulative correct vs partial vs incorrect ratings",
+      "type": "bargauge",
+      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
+      "options": {
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["sum"] },
+        "displayMode": "gradient"
+      },
+      "targets": [
+        {
+          "expr": "sum by (rating) (sentinelai_fix_ratings_total)",
+          "legendFormat": "{{rating}}"
+        }
+      ],
+      "datasource": "Prometheus"
+    }
+  ]
+}

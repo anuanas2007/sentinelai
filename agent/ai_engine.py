@@ -26,12 +26,14 @@ analyze_incident() kicks off the crew and returns the fix agent's
 output as plain text — that's the only thing the caller sees.
 """
 import os
+import time
 from pydantic import BaseModel, Field
 from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
 import redis_store
 import vector_memory
 import events
+import metrics
 
 # Mounted read-only into the container — toy-scale simplification.
 # See docs/SECOND_ITERATION_ARCHITECTURE.md for why this doesn't scale
@@ -167,9 +169,12 @@ class GetSimilarIncidentsTool(BaseTool):
 
         matches = [m for m in matches if m["distance"] <= MAX_DISTANCE]
         if not matches:
+            metrics.vector_memory_hits_total.labels(found="false").inc()
             result = "No similar past incidents found (or none have been analyzed yet)."
             events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
             return result
+
+        metrics.vector_memory_hits_total.labels(found="true").inc()
 
         # Re-rank by rating so a correct-rated fix beats an incorrect one
         # even if the incorrect one scored slightly higher on similarity.
@@ -186,13 +191,16 @@ class GetSimilarIncidentsTool(BaseTool):
         return result
 
 
-def _stage_callback(stage_label: str):
+def _stage_callback(stage_label: str, metric_stage: str):
     """
     Prints a clean, labeled block to stdout when a task finishes --
     visible in `docker compose logs sentinel-agent`, distinct from
     CrewAI's own raw verbose debug output (which stays off by default).
     """
+    start = time.time()
+
     def callback(output):
+        metrics.pipeline_duration_seconds.labels(stage=metric_stage).observe(time.time() - start)
         text = getattr(output, "raw", None) or str(output)
         print(f"\n🔎 STAGE: {stage_label}", flush=True)
         print("-" * 60)
@@ -288,7 +296,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "evidence is insufficient."
         ),
         agent=investigator_agent,
-        callback=_stage_callback("Investigation (file retrieval + root cause)"),
+        callback=_stage_callback("Investigation (file retrieval + root cause)", "investigation"),
     )
 
     fix_task = Task(
@@ -317,7 +325,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
         ),
         agent=fix_agent,
         context=[investigator_task],
-        callback=_stage_callback("Fix proposal (human review required)"),
+        callback=_stage_callback("Fix proposal (human review required)", "fix_proposal"),
     )
 
     crew = Crew(

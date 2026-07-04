@@ -55,15 +55,36 @@ No failure modes. Always returns `{"status": "ok"}`.
 
 ## What SentinelAI actually does when one of these fires
 
-- **Immediate-class event** → instant `🚨 IMMEDIATE INCIDENT` alert in `sentinel-agent`'s logs, on the very first occurrence, with the last 10 log lines as context and current detector stats.
-- **Threshold-class event** → silent until 3 occurrences in the last rolling 60 seconds (`⚠️ WARNING`, no AI handoff), then `🚨 CRITICAL INCIDENT` (AI handoff flag set) once it crosses 5 in that same rolling window. The window decays continuously — old occurrences age out after 60s, so the count can drop back below threshold if errors stop.
-- **Cascade detection** — if two *different* error types occur within 30 seconds of each other, 3+ times, SentinelAI flags it as a confirmed cascade pattern (e.g. `db_connection_error → order_failed_user_not_found` repeating) in the incident's `pattern` field.
-- Right now, all of the above just prints to `sentinel-agent`'s container logs (`docker compose logs -f sentinel-agent`). No AI reasoning happens yet — `requires_ai: True` is set on the `Incident` object but nothing currently consumes it. That's the next major piece of Week 2.
+- **Immediate-class event** → instant `🚨 IMMEDIATE INCIDENT` alert, AI analysis queued immediately.
+- **Threshold-class event** → `⚠️ WARNING` on first occurrence, `🚨 CRITICAL INCIDENT` with AI analysis queued once 3+ in 60s window. Window decays continuously — old occurrences age out after 60s.
+- **Cascade detection** — if two different error types occur within 30s of each other 3+ times, confirmed as a cascade pattern. AI receives both events' context and must give a verdict: `Cascade verdict: YES` (causal) or `Cascade verdict: NO` (independent).
+- **AI pipeline** — investigator agent reads actual source code, states root cause + confidence. Fixer agent proposes a code diff for human review. Never auto-applies. Fix proposals can be rated correct / partial / incorrect.
+- **AI cooldown** — 120s per event/cascade to prevent redundant calls from a single burst.
+
+## DB reset utilities
+
+If balance or stock is depleted and you want to repeat a scenario without restarting Docker, use the trigger panel's **Add balance** and **Add stock** buttons (or call the endpoints directly):
+
+```bash
+# Top up Alice's balance by $500
+curl -X POST localhost:8000/admin/topup -H "Content-Type: application/json" -d '{"user_id": 1, "amount": 500}'
+
+# Restock item_a by 100 units
+curl -X POST localhost:8000/admin/restock -H "Content-Type: application/json" -d '{"item_name": "item_a", "quantity": 100}'
+```
+
+## Observability
+
+- **Live UI** — `http://localhost:5173` — 4-column pipeline view (activity, detector, investigator, fixer)
+- **Grafana** — `http://localhost:3000` — AI pipeline metrics dashboard (detection funnel, fix accuracy, pipeline latency, cascade analysis, vector memory hit rate)
+- **Prometheus** — `http://localhost:9090` — raw metrics, scraped from `sentinel-agent:9000/metrics` every 15s
+- **Agent logs** — `docker compose logs -f sentinel-agent`
 
 ## How to watch it happen
 
 ```bash
 docker compose up --build -d
-docker compose logs -f sentinel-agent   # watch this terminal
-# in another terminal, trigger any of the events above
+# Live UI at http://localhost:5173
+# Grafana at http://localhost:3000 (admin / admin)
+# Trigger scenarios from the UI's trigger panel
 ```
