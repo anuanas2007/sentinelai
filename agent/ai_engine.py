@@ -153,23 +153,35 @@ class GetSimilarIncidentsTool(BaseTool):
     args_schema: type[BaseModel] = _SimilarIncidentsArgs
 
     def _run(self, incident_summary: str) -> str:
+        # Similarity threshold: cosine distance > 0.5 means the past
+        # incident is too different to be useful precedent. Better to
+        # return nothing than to surface a misleading near-miss.
+        MAX_DISTANCE = 0.5
+
         try:
-            matches = vector_memory.query_similar(incident_summary, n_results=1)
+            matches = vector_memory.query_similar(incident_summary, n_results=3)
         except Exception as e:
             result = f"Could not retrieve similar incidents: {e}"
             events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
             return result
+
+        matches = [m for m in matches if m["distance"] <= MAX_DISTANCE]
         if not matches:
             result = "No similar past incidents found (or none have been analyzed yet)."
             events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
             return result
-        parts = []
-        for m in matches:
-            parts.append(
-                f"## Past fix for a similar incident ({m['event']})\n\n"
-                f"{m['fix_proposal']}"
-            )
-        result = "\n\n---\n\n".join(parts)
+
+        # Re-rank by rating so a correct-rated fix beats an incorrect one
+        # even if the incorrect one scored slightly higher on similarity.
+        _RATING_PRIORITY = {"correct": 0, "partial": 2, "incorrect": 3}
+        matches.sort(key=lambda m: _RATING_PRIORITY.get(m.get("rating"), 1))
+        best = matches[0]
+
+        rating_label = best.get("rating") or "unrated"
+        result = (
+            f"## Past fix for a similar incident ({best['event']}) — rated: {rating_label}\n\n"
+            f"{best['fix_proposal']}"
+        )
         events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
         return result
 

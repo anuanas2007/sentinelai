@@ -117,6 +117,7 @@ def query_similar(incident_summary: str, n_results: int = 3) -> list[dict]:
             "diagnosis": doc,
             "fix_proposal": meta.get("fix_proposal"),
             "distance": dist,
+            "rating": meta.get("rating"),  # None if never rated
         })
     return matches
 
