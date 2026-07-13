@@ -26,12 +26,14 @@ analyze_incident() kicks off the crew and returns the fix agent's
 output as plain text — that's the only thing the caller sees.
 """
 import os
+import time
 from pydantic import BaseModel, Field
 from crewai import Agent, Task, Crew, Process
 from crewai.tools import BaseTool
 import redis_store
 import vector_memory
 import events
+import metrics
 
 # Mounted read-only into the container — toy-scale simplification.
 # See docs/SECOND_ITERATION_ARCHITECTURE.md for why this doesn't scale
@@ -129,58 +131,81 @@ class GetIncidentHistoryTool(BaseTool):
 
 
 class _SimilarIncidentsArgs(BaseModel):
-    incident_summary: str = Field(
+    event_name: str = Field(
         ...,
-        description="The root cause hypothesis text -- pass it verbatim, not a paraphrase."
+        description="The exact event name from the incident summary, e.g. 'background_task_failed' or 'negative_balance_detected'."
     )
 
 
 class GetSimilarIncidentsTool(BaseTool):
     name: str = "get_similar_incidents"
     description: str = (
-        "Returns past incidents that looked SIMILAR to this one, even if "
-        "they were a different event type -- unlike get_incident_history, "
-        "which only matches the exact same event name. Each result "
-        "includes a past diagnosis AND the fix that was proposed for it. "
-        "This is precedent, not proof -- a similar-looking past incident "
-        "isn't necessarily the same root cause this time, and its fix "
-        "may not transfer directly. Use it as a lead to consider "
-        "alongside the actual retrieved file content, never as a "
-        "substitute for it. Returns nothing if no past incidents have "
-        "been analyzed yet -- that's a normal cold-start state, not an "
-        "error."
+        "Returns the fix that was proposed for a past incident of the same "
+        "type, along with brief context about that past incident so you can "
+        "judge whether it was actually the same issue. "
+        "IMPORTANT: read the context carefully before using the fix. If the "
+        "past incident was a different root cause or a different scenario, "
+        "say so explicitly and do not use that fix. Only treat it as a lead "
+        "if the past incident genuinely matches the current one. "
+        "Returns nothing if no past incidents have been analyzed yet."
     )
     args_schema: type[BaseModel] = _SimilarIncidentsArgs
 
-    def _run(self, incident_summary: str) -> str:
+    def _run(self, event_name: str) -> str:
         try:
-            matches = vector_memory.query_similar(incident_summary, n_results=1)
+            matches = vector_memory.query_similar(event_name, n_results=3)
         except Exception as e:
             result = f"Could not retrieve similar incidents: {e}"
-            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=event_name, output=result)
             return result
+
         if not matches:
+            metrics.vector_memory_hits_total.labels(found="false").inc()
             result = "No similar past incidents found (or none have been analyzed yet)."
-            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
+            events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=event_name, output=result)
             return result
-        parts = []
-        for m in matches:
-            parts.append(
-                f"## Past fix for a similar incident ({m['event']})\n\n"
-                f"{m['fix_proposal']}"
-            )
-        result = "\n\n---\n\n".join(parts)
-        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=incident_summary[:200], output=result)
+
+        metrics.vector_memory_hits_total.labels(found="true").inc()
+
+        # Prioritise correct-rated fixes — if none are rated correct,
+        # fall back to unrated, then partial, then incorrect.
+        _RATING_PRIORITY = {"correct": 0, "partial": 2, "incorrect": 3}
+        matches.sort(key=lambda m: _RATING_PRIORITY.get(m.get("rating"), 1))
+        best = matches[0]
+
+        rating_label = best.get("rating") or "unrated"
+
+        # Pull a few lines of context from the stored incident summary so
+        # the fixer can judge whether the past incident is actually the same
+        # issue before deciding to use the fix.
+        past_summary = best.get("incident_summary") or ""
+        context_lines = [
+            l for l in past_summary.splitlines()
+            if any(l.startswith(p) for p in ("Event:", "Severity:", "Event context:", "Cascade", "Upstream", "Downstream"))
+        ]
+        context_snippet = "\n".join(context_lines[:6]) if context_lines else f"Event: {best['event']}"
+
+        result = (
+            f"## Past fix for a similar incident — rated: {rating_label}\n\n"
+            f"**Past incident context** (judge whether this matches your current incident before using the fix):\n"
+            f"{context_snippet}\n\n"
+            f"**Past fix proposal:**\n"
+            f"{best['fix_proposal']}"
+        )
+        events.push_pipeline_event("tool_call", incident_id=_current_incident_id, tool="get_similar_incidents", input=event_name, output=result)
         return result
 
 
-def _stage_callback(stage_label: str):
+def _stage_callback(stage_label: str, metric_stage: str):
     """
     Prints a clean, labeled block to stdout when a task finishes --
     visible in `docker compose logs sentinel-agent`, distinct from
     CrewAI's own raw verbose debug output (which stays off by default).
     """
+    start = time.time()
+
     def callback(output):
+        metrics.pipeline_duration_seconds.labels(stage=metric_stage).observe(time.time() - start)
         text = getattr(output, "raw", None) or str(output)
         print(f"\n🔎 STAGE: {stage_label}", flush=True)
         print("-" * 60)
@@ -276,7 +301,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "evidence is insufficient."
         ),
         agent=investigator_agent,
-        callback=_stage_callback("Investigation (file retrieval + root cause)"),
+        callback=_stage_callback("Investigation (file retrieval + root cause)", "investigation"),
     )
 
     fix_task = Task(
@@ -305,7 +330,7 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
         ),
         agent=fix_agent,
         context=[investigator_task],
-        callback=_stage_callback("Fix proposal (human review required)"),
+        callback=_stage_callback("Fix proposal (human review required)", "fix_proposal"),
     )
 
     crew = Crew(

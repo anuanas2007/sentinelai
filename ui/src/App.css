@@ -31,6 +31,42 @@ body {
   margin: 0;
 }
 
+.tab-nav {
+  display: flex;
+  gap: 4px;
+  background: #1a1d24;
+  border-radius: 8px;
+  padding: 3px;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tab-btn:hover {
+  color: #e8e8e8;
+}
+
+.tab-active {
+  background: #2a2d34;
+  color: #e8e8e8;
+}
+
+.grafana-frame {
+  flex: 1;
+  border: none;
+  border-radius: 8px;
+  width: 100%;
+}
+
 .status-dot {
   font-size: 12px;
   padding: 4px 10px;

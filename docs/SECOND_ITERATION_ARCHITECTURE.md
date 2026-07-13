@@ -469,9 +469,49 @@ Asked directly "where can I score each fix it gives" — this connects straight 
 
 `docker compose up` didn't actually serve the UI at all through most of this work — it only ran via a manual `npm run dev` step outside the compose stack, flagged directly as a real gap before calling this finalized ("we need to finalise this"). Multi-stage build (`node:alpine` builds the static bundle, `nginx:alpine` serves it) — the standard pattern for a built SPA, not worth a custom static server. No runtime environment injection needed: the browser, not the UI container, talks directly to `sentinel-agent`'s published port, so the existing build-time default already resolves correctly.
 
+### Grafana/Prometheus: observing the AI pipeline itself
+
+Added as the third observability layer (after agent logs and the live UI). The interesting distinction is what gets measured: not infrastructure metrics (CPU, memory — any app has those), but AI pipeline metrics that only make sense because this is a monitoring system with its own AI reasoning engine.
+
+Custom `prometheus_client` counters and histograms pushed from `agent/metrics.py` at key pipeline events:
+
+- `sentinelai_errors_total{event_type}` — every error log line seen
+- `sentinelai_incidents_total{event_type, severity}` — every confirmed incident
+- `sentinelai_ai_dispatches_total{event_type}` — AI calls actually queued (after cooldown gate)
+- `sentinelai_ai_cooldowns_total` — dispatches suppressed by the 120s cooldown
+- `sentinelai_cascade_confirmations_total{canonical_pair}` — cascade patterns confirmed
+- `sentinelai_fix_ratings_total{event_type, rating}` — human ratings on fix proposals
+- `sentinelai_vector_memory_hits_total{found}` — whether `get_similar_incidents` found a useful match
+- `sentinelai_pipeline_duration_seconds{stage}` — histogram per stage: `investigation`, `fix_proposal`, `end_to_end`
+
+Exposed at `GET sentinel-agent:9000/metrics`, scraped by Prometheus every 15s, visualised in a pre-built Grafana dashboard (`grafana/provisioning/dashboards/sentinelai.json`) that loads automatically on `docker compose up`.
+
+The dashboard panels were chosen specifically because they answer questions about the AI system's behaviour over time: the detection funnel shows where events drop off (threshold? cooldown? not AI-worthy?); fix accuracy over time shows whether vector memory is improving quality as it warms up; pipeline latency shows the real SLA from error to proposed fix; cascade confirmations and AI verdicts show whether cascade detection is surfacing real patterns or noise.
+
+Anonymous viewer access enabled by default (no login required to view, admin/admin to edit) — single-user local demo, not a multi-tenant deployment, same rationale as the wide-open CORS on the agent.
+
+The dashboard is also embedded directly in the live UI as a **Metrics** tab (Live / Metrics switcher in the header). Grafana blocks iframe embedding by default (`X-Frame-Options: deny`) — requires `GF_SECURITY_ALLOW_EMBEDDING=true` to allow it. The iframe uses `?kiosk` mode to hide Grafana's own navbar so it reads as part of the SentinelAI UI rather than a separate app embedded inside it.
+
+**Data retention across all storage layers:**
+
+| Layer | What | Retention |
+|---|---|---|
+| events.py (in-memory) | SSE pipeline events (UI feed) | Last 500 events — lost on container restart |
+| events.py (in-memory) | Activity feed events | Last 300 events — lost on container restart |
+| Redis | Incident history (`get_incident_history` tool) | 24 hours, auto-expired |
+| ChromaDB | Vector memory — diagnoses + fix proposals | Forever — `chroma-data` Docker volume |
+| Prometheus | All metrics | 15 days (default) — persists in its own volume |
+| Grafana | Dashboard config | Forever — `grafana-data` Docker volume |
+| Log ring buffer | Raw log lines (in-memory) | Last 100 lines — lost on restart |
+
+The key gap: SSE events are in-memory only. If the agent container restarts, the Live tab starts blank even though incidents are still in Redis and ChromaDB. The UI has no mechanism to replay from persistent storage on reconnect — a known limitation, not an oversight.
+
+### Vector memory retrieval: prioritising correct-rated fixes
+
+`get_similar_incidents` originally returned purely the closest match by cosine distance — a correctly-rated past fix could lose to a slightly-more-similar incorrectly-rated one. Changed to: query top 3 by similarity, filter out any with cosine distance > 0.5 (too dissimilar to be useful precedent), re-rank remaining by rating priority (correct → unrated → partial → incorrect), return the best one. The tool output now includes the rating label so the fixer knows how much to trust it. The 0.5 threshold means a cold memory with no similar incidents returns nothing rather than a misleading near-miss.
+
 ### Open, deliberately deferred
 
-- **Trigger panel** (buttons to fire specific scenarios + a sustained-traffic toggle, reusing `traffic_simulator`'s logic directly rather than controlling its container via `docker.sock` — the same decoupling principle that shaped the log-streaming architecture originally) — next phase, not built yet.
-- **Grafana/Prometheus tab** — still planned, not started.
-- **Whether `get_similar_incidents` should move from the investigator to the fixer** — raised directly: the tool returns both a past diagnosis *and* a past fix, but the investigator's job is diagnosing from code it actually reads (already verified it does this well unaided), while the fixer's job — writing a concrete fix — is where "here's a similar fix that worked before" is most directly actionable. The investigator also already carries 4 tools and a lot of responsibility; the fixer currently has zero. Not yet changed.
+- **Dedicated trigger buttons for `order_failed_insufficient_balance` and `order_failed_insufficient_stock`** — Bob (user_id=2, always $0) and item_b (always 0 stock) make these reliably triggerable; deferred, using payment_cascade for now.
+- **`db_pool_exhausted` in `AI_WORTHY_EVENTS`** — detected but not sent to AI; the log line already names the cause, but AI could investigate whether our own connection-pool configuration and hold patterns are adequate. One-line change, deferred.
 - **Why 2 AI agents, not 1** — addressed directly when asked how to honestly answer this if challenged: not because 1 agent couldn't technically produce both outputs, but because the diagnose/propose-fix split mirrors the project's actual safety boundary (propose-only, never auto-apply) as a structural role separation, not just a prompt instruction inside one agent. Validated against the alternative of *more* splitting (the original 3-agent retrieval/hypothesis seam, which caused a real hallucination bug) but never explicitly A/B tested against 1 combined agent — an honest, not overclaimed, justification.

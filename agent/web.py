@@ -16,12 +16,14 @@ import json
 import os
 import random
 from fastapi import Body, FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 import httpx
 import events
 import vector_memory
+import metrics
 
 TARGET_BASE_URL = os.environ.get("TARGET_BASE_URL", "http://localhost:8000")
 
@@ -159,6 +161,11 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+async def prometheus_metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 def _make_stream(get_since, get_recent):
     """
     Server-Sent Events, not WebSocket -- this channel only ever pushes
@@ -218,6 +225,15 @@ async def rate_incident(incident_id: str, body: RatingRequest):
         return {"status": "error", "error": str(e)}
     if not found:
         return {"status": "not_found"}
+
+    # Look up the event type from vector memory so we can label the metric
+    try:
+        existing = vector_memory._get_collection().get(ids=[incident_id])
+        event_type = existing["metadatas"][0].get("event", "unknown") if existing["ids"] else "unknown"
+    except Exception:
+        event_type = "unknown"
+    metrics.fix_ratings_total.labels(event_type=event_type, rating=body.rating).inc()
+
     return {"status": "ok"}
 
 

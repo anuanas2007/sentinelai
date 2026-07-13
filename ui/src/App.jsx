@@ -7,6 +7,7 @@ import { AiOutput } from './AiOutput'
 import { RatingButtons } from './RatingButtons'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:9000'
+const GRAFANA_URL = 'http://localhost:3000/d/sentinelai-pipeline?orgId=1&kiosk'
 
 const SCENARIOS = [
   {
@@ -354,22 +355,40 @@ function App() {
   const pipeline = useEventStream('/api/events/pipeline/history', '/api/events/pipeline/stream')
   const incidents = useMemo(() => groupIncidents(pipeline.events), [pipeline.events])
   const [expanded, setExpanded] = useState(null) // { incident, view }
+  const [tab, setTab] = useState('live') // 'live' | 'metrics'
 
   return (
     <div className="app">
       <header className="app-header">
-        <h1>SentinelAI — Live</h1>
+        <h1>SentinelAI</h1>
+        <nav className="tab-nav">
+          <button className={`tab-btn${tab === 'live' ? ' tab-active' : ''}`} onClick={() => setTab('live')}>Live</button>
+          <button className={`tab-btn${tab === 'metrics' ? ' tab-active' : ''}`} onClick={() => setTab('metrics')}>Metrics</button>
+        </nav>
         <ConnectionDot connected={activity.connected && pipeline.connected} />
       </header>
-      <TriggerPanel />
-      <main className="columns">
-        <ActivityColumn events={activity.events} />
-        <DetectorColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
-        <InvestigatorColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
-        <FixerColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
-      </main>
-      {expanded && (
-        <IncidentModal incident={expanded.incident} view={expanded.view} onClose={() => setExpanded(null)} />
+
+      {tab === 'live' && (
+        <>
+          <TriggerPanel />
+          <main className="columns">
+            <ActivityColumn events={activity.events} />
+            <DetectorColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
+            <InvestigatorColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
+            <FixerColumn incidents={incidents} onExpand={(incident, view) => setExpanded({ incident, view })} />
+          </main>
+          {expanded && (
+            <IncidentModal incident={expanded.incident} view={expanded.view} onClose={() => setExpanded(null)} />
+          )}
+        </>
+      )}
+
+      {tab === 'metrics' && (
+        <iframe
+          className="grafana-frame"
+          src={GRAFANA_URL}
+          title="SentinelAI Metrics"
+        />
       )}
     </div>
   )

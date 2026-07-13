@@ -33,10 +33,12 @@ flowchart TB
         FIX["Fixer Agent<br/>(CrewAI)"]
         RD[("Redis<br/>24h incident history")]
         VM[("ChromaDB<br/>long-term vector memory")]
-        WEB["web.py<br/>FastAPI + SSE"]
+        WEB["web.py<br/>FastAPI + SSE + /metrics"]
     end
 
     UI["React UI<br/>live 4-column pipeline view"]
+    PROM["Prometheus<br/>scrapes /metrics every 15s"]
+    GRAF["Grafana<br/>AI pipeline dashboard"]
 
     TA -. "structured JSON logs,<br/>shared volume only" .-> LC
     LC --> ED
@@ -51,6 +53,8 @@ flowchart TB
     WEB -- "Server-Sent Events" --> UI
     UI -- "rate a fix" --> WEB
     WEB --> VM
+    WEB -. "/metrics" .-> PROM
+    PROM --> GRAF
 ```
 
 ## Why these specific design choices
@@ -82,8 +86,10 @@ docker compose up --build
 ```
 
 - Target app: `http://localhost:8000`
-- Live UI: `http://localhost:5173`
+- Live UI: `http://localhost:5173` — use the **Metrics** tab in the header to view the Grafana dashboard inline
 - Agent API: `http://localhost:9000`
+- Grafana: `http://localhost:3000` (login: admin / admin)
+- Prometheus: `http://localhost:9090`
 
 To run without spending on AI calls (detection still works fully): `OPENAI_API_KEY= docker compose up`.
 

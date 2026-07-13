@@ -10,6 +10,7 @@ from error_detector import ErrorDetector, Incident, WINDOW_SECONDS
 import ai_engine
 import redis_store
 import events
+import metrics
 
 # ============================================================
 # RING BUFFER
@@ -30,6 +31,11 @@ detector = ErrorDetector()
 # the log-watching loop below never blocks waiting on an LLM call.
 # ============================================================
 ai_queue: "queue.Queue[tuple[str, Incident]]" = queue.Queue()
+
+# Tracks which canonical cascade pairs have already been counted in the
+# Prometheus metric so we only increment once per unique confirmed pair,
+# not on every subsequent incident that carries the same pattern.
+_metriced_cascades: set = set()
 
 
 BASE_APP_CONTEXT = (
@@ -145,7 +151,9 @@ def ai_worker_loop():
                 incident_event=incident.trigger_event.event,
             )
             print(f"\n🤖 [SentinelAI] Running AI analysis on '{incident.trigger_event.event}'...", flush=True)
+            t0 = time.time()
             result = ai_engine.analyze_incident(summary, incident.trigger_event.event, incident_id)
+            metrics.pipeline_duration_seconds.labels(stage="end_to_end").observe(time.time() - t0)
             print("\n" + "=" * 60, flush=True)
             print("🤖 AI ANALYSIS RESULT")
             print("=" * 60)
@@ -247,6 +255,26 @@ def handle_error(error_entry: dict):
         requires_ai=incident.requires_ai,
         ai_worthy=incident.ai_worthy,
     )
+
+    metrics.incidents_total.labels(
+        event_type=incident.trigger_event.event,
+        severity=incident.severity,
+    ).inc()
+
+    if incident.ai_worthy and not incident.requires_ai and incident.severity != "warning":
+        # ai_worthy + not requires_ai + not warning = cooldown suppressed it
+        metrics.ai_cooldowns_total.inc()
+
+    if incident.requires_ai:
+        metrics.ai_dispatches_total.labels(
+            event_type=incident.trigger_event.event,
+        ).inc()
+
+    if incident.pattern:
+        canonical = " ↔ ".join(sorted([p.strip() for p in incident.pattern.split("→")]))
+        if canonical in detector.confirmed_cascades and canonical not in _metriced_cascades:
+            _metriced_cascades.add(canonical)
+            metrics.cascade_confirmations_total.labels(canonical_pair=canonical).inc()
 
     # Print incident alert
     severity_emoji = "🚨" if incident.severity in ("immediate", "critical") else "⚠️"
@@ -369,6 +397,9 @@ def watch_log_file(log_path: str):
 
                 # If error — handle immediately
                 if is_error(log_entry):
+                    metrics.errors_total.labels(
+                        event_type=log_entry.get("event", "unknown")
+                    ).inc()
                     handle_error(log_entry)
 
 

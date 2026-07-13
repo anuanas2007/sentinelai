@@ -1,0 +1,7 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: sentinel-agent
+    static_configs:
+      - targets: ["sentinel-agent:9000"]
