@@ -10,9 +10,17 @@ export function AppProvider({ children }) {
   const [cart, setCart]             = useState({}) // { item_name: qty }
   const [lastOrder, setLastOrder]   = useState(null)
 
+  const [loadError, setLoadError] = useState(null)
+
   useEffect(() => {
-    fetch(`${API}/items`).then(r => r.json()).then(setItems).catch(() => {})
-    fetch(`${API}/users`).then(r => r.json()).then(setUsers).catch(() => {})
+    fetch(`${API}/items`)
+      .then(r => { if (!r.ok) throw new Error(`/items ${r.status}`); return r.json() })
+      .then(setItems)
+      .catch(e => setLoadError(e.message))
+    fetch(`${API}/users`)
+      .then(r => { if (!r.ok) throw new Error(`/users ${r.status}`); return r.json() })
+      .then(setUsers)
+      .catch(() => {})
   }, [])
 
   const refreshData = useCallback(() => {
@@ -44,7 +52,7 @@ export function AppProvider({ children }) {
     <AppContext.Provider value={{
       users, items, activeUser, setActiveUser,
       cart, cartCount, addToCart, changeQty, removeFromCart, clearCart,
-      lastOrder, setLastOrder, refreshData,
+      lastOrder, setLastOrder, refreshData, loadError,
     }}>
       {children}
     </AppContext.Provider>

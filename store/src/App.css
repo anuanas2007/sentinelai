@@ -513,6 +513,34 @@ input[type="radio"] { accent-color: var(--accent); }
 .add-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .add-btn:disabled { background: var(--surface-raised); color: var(--text-muted); cursor: not-allowed; }
 
+.card-qty-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--accent-glow);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin-top: auto;
+}
+
+.card-qty-control button {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 18px;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+}
+
+.card-qty-control button:hover { background: rgba(255,255,255,0.08); }
+.card-qty-control span { font-size: 13px; font-weight: 700; color: var(--accent); }
+
 /* ── Page common ────────────────────────────────────── */
 .page-title {
   font-size: 24px;
