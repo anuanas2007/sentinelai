@@ -150,7 +150,7 @@ async def total_inventory() -> int:
         return await conn.fetchval("SELECT coalesce(sum(stock), 0) FROM items")
 
 
-async def apply_order(user_id: int, item_name: str, quantity: int, total_charged: float, payment_method: str = "credits") -> float:
+async def apply_order(user_id: int, item_name: str, quantity: int, total_charged: float, payment_method: str = "credits") -> dict:
     """
     Deducts stock and balance, then records the order.
 
@@ -161,14 +161,16 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
     user's balance and the item's stock *before* calling this function,
     and that earlier read is never re-validated inside this same
     transaction. Two concurrent orders can both pass that earlier check
-    and both land here, overdrawing the balance. This is intentional —
-    see docs/SECOND_ITERATION_ARCHITECTURE.md for why.
+    and both land here, overdrawing the balance or stock. This is
+    intentional — see docs/SECOND_ITERATION_ARCHITECTURE.md for why.
     """
     async with _connection() as conn:
         try:
             async with conn.transaction():
-                await conn.execute(
-                    "UPDATE items SET stock = stock - $1 WHERE name = $2",
+                # RETURNING lets callers detect negative stock after the fact
+                # (same pattern as negative balance detection below).
+                new_stock = await conn.fetchval(
+                    "UPDATE items SET stock = stock - $1 WHERE name = $2 RETURNING stock",
                     quantity, item_name,
                 )
                 # Card payments don't touch the balance — only credits path deducts.
@@ -191,7 +193,19 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
         except asyncpg.exceptions.DeadlockDetectedError as e:
             raise DBDeadlock(str(e))
 
-    return float(new_balance) if new_balance is not None else None
+    return {
+        "new_balance": float(new_balance) if new_balance is not None else None,
+        "new_stock": int(new_stock) if new_stock is not None else 0,
+    }
+
+
+async def set_stock(item_name: str, stock: int) -> int:
+    async with _connection() as conn:
+        new_stock = await conn.fetchval(
+            "UPDATE items SET stock = $1 WHERE name = $2 RETURNING stock",
+            stock, item_name,
+        )
+        return int(new_stock) if new_stock is not None else 0
 
 
 async def topup_balance(user_id: int, amount: float) -> float:

@@ -3,7 +3,9 @@ import { useNavigate, Link } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { fmt } from '../utils'
 
-const DEMO_PASSWORD = 'password123'
+const DEMO_PASSWORD  = 'password123'
+const ADMIN_EMAIL    = 'admin@technest.com'
+const ADMIN_PASSWORD = 'admin123'
 
 export default function LoginPage() {
   const { users, activeUser, setActiveUser } = useApp()
@@ -20,6 +22,11 @@ export default function LoginPage() {
   function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    if (email.trim().toLowerCase() === ADMIN_EMAIL) {
+      if (password !== ADMIN_PASSWORD) { setError('Incorrect password.'); return }
+      navigate('/admin')
+      return
+    }
     const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase())
     if (!user) {
       setError('No account found with that email.')

@@ -29,6 +29,7 @@ IMMEDIATE_ERRORS = {
     "order_failed_insufficient_balance",
     "order_failed_fk_violation",
     "negative_balance_detected",
+    "negative_stock_detected",
     "unhandled_exception",
     "background_task_failed",
     "email_service_unreachable",
@@ -94,6 +95,7 @@ THRESHOLD_ERRORS = {
 # ============================================================
 AI_WORTHY_EVENTS = {
     "negative_balance_detected",
+    "negative_stock_detected",
     "analytics_failed",
     "external_api_timeout",
     "external_api_error",

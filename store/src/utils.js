@@ -1,4 +1,5 @@
-export const API = import.meta.env.VITE_API_BASE || 'http://localhost:8000'
+export const API       = import.meta.env.VITE_API_BASE   || 'http://localhost:8000'
+export const AGENT_API = import.meta.env.VITE_AGENT_BASE || 'http://localhost:9000'
 
 export const ITEM_EMOJI = {
   headphones:       '🎧',

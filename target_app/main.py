@@ -175,6 +175,11 @@ class RestockRequest(BaseModel):
     quantity: int
 
 
+class SetStockRequest(BaseModel):
+    item_name: str
+    stock: int
+
+
 @app.post("/users", status_code=201)
 async def signup(req: SignupRequest):
     try:
@@ -196,6 +201,12 @@ async def admin_topup(req: TopupRequest):
 @app.post("/admin/restock")
 async def admin_restock(req: RestockRequest):
     new_stock = await db.restock_item(req.item_name, req.quantity)
+    return {"item_name": req.item_name, "new_stock": new_stock}
+
+
+@app.post("/admin/set_stock")
+async def admin_set_stock(req: SetStockRequest):
+    new_stock = await db.set_stock(req.item_name, req.stock)
     return {"item_name": req.item_name, "new_stock": new_stock}
 
 
@@ -317,7 +328,7 @@ async def create_order(order: OrderRequest):
     # Write — deliberately not re-checking balance/stock here. See
     # docs/SECOND_ITERATION_ARCHITECTURE.md for why this gap is intentional.
     try:
-        new_balance = await db.apply_order(
+        result = await db.apply_order(
             order.user_id, order.item, order.quantity, total, order.payment_method
         )
     except db.DBForeignKeyViolation as e:
@@ -330,6 +341,9 @@ async def create_order(order: OrderRequest):
     except (db.DBPoolExhausted, db.DBConnectionError) as e:
         _handle_db_exception(e, user_id=order.user_id)
 
+    new_balance = result["new_balance"]
+    new_stock   = result["new_stock"]
+
     log.info("order_created_successfully", user_id=order.user_id, item=order.item)
 
     # Fire-and-forget -- the response below goes back to the client
@@ -340,12 +354,14 @@ async def create_order(order: OrderRequest):
     _background_tasks.add(task)
     task.add_done_callback(_on_background_task_done)
 
-    # Credits only: detected after the fact, not prevented — this is what
-    # makes the non-atomic check-then-write race condition visible as an
-    # incident instead of a silent data-integrity bug.
+    # Detected after the fact, not prevented — makes the non-atomic
+    # check-then-write race conditions visible as incidents.
     if new_balance is not None and new_balance < 0:
         log.error("negative_balance_detected",
                   user_id=order.user_id, balance=new_balance)
+    if new_stock < 0:
+        log.error("negative_stock_detected",
+                  item=order.item, stock=new_stock)
 
     return {"status": "success", "total_charged": total, "payment_method": order.payment_method}
 
