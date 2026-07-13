@@ -39,10 +39,18 @@ INSERT INTO users (name, email, balance) VALUES
     ('Ethan Wright', 'ethan@example.com',   150.00);
 
 INSERT INTO items (name, display_name, price, stock) VALUES
-    ('headphones', 'Wireless Headphones',  89.99,  8),
-    ('keyboard',   'Mechanical Keyboard', 129.00,  3),
-    ('usb_hub',    'USB-C Hub',            34.99, 12),
-    ('webcam',     'Webcam 1080p',         59.99,  0),
-    ('mouse_pad',  'Desk Mat XL',          24.99, 20),
-    ('desk_lamp',  'LED Desk Lamp',        44.99,  5),
-    ('ssd',        'Portable SSD 512GB',   79.99,  2);
+    ('headphones',      'Wireless Headphones',   89.99,  8),
+    ('keyboard',        'Mechanical Keyboard',  129.00,  3),
+    ('usb_hub',         'USB-C Hub',             34.99, 12),
+    ('webcam',          'Webcam 1080p',          59.99,  0),
+    ('mouse_pad',       'Desk Mat XL',           24.99, 20),
+    ('desk_lamp',       'LED Desk Lamp',         44.99,  5),
+    ('ssd',             'Portable SSD 512GB',    79.99,  2),
+    ('monitor',         '27" IPS Monitor',      349.99,  2),
+    ('laptop_stand',    'Laptop Stand',          49.99,  7),
+    ('wireless_charger','Wireless Charger Pad',  29.99,  8),
+    ('microphone',      'USB Condenser Mic',     99.99,  3),
+    ('led_strip',       'LED Strip Lights',      24.99, 10),
+    ('controller',      'Gaming Controller',     69.99,  4),
+    ('cable_pack',      'USB-C Cable Pack',      14.99, 25),
+    ('headphone_stand', 'Headphone Stand',       34.99,  6);

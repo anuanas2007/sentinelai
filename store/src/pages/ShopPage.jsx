@@ -34,21 +34,26 @@ export default function ShopPage() {
           {filtered.map(item => {
             const stock = stockLabel(item.stock)
             const inCart = cart[item.name] ?? 0
+            const catClass = `img-${(ITEM_CATEGORY[item.name] || 'accessories').toLowerCase()}`
             return (
               <div key={item.name} className={`product-card${item.stock === 0 ? ' product-out' : ''}`}>
-                <div className="product-category">{ITEM_CATEGORY[item.name]}</div>
-                <div className="product-emoji">{ITEM_EMOJI[item.name] ?? '📦'}</div>
-                <div className="product-name">{item.display_name}</div>
-                <div className="product-price">{fmt(item.price)}</div>
-                <div className={`stock-pill ${stock.cls}`}>{stock.text}</div>
-                {inCart > 0 && <div className="in-cart-badge">{inCart} in cart</div>}
-                <button
-                  className="add-btn"
-                  disabled={item.stock === 0}
-                  onClick={() => addToCart(item)}
-                >
-                  {item.stock === 0 ? 'Unavailable' : '+ Add to Cart'}
-                </button>
+                <div className={`product-img ${catClass}`}>
+                  <span className="product-emoji">{ITEM_EMOJI[item.name] ?? '📦'}</span>
+                </div>
+                <div className="product-card-body">
+                  <div className="product-category">{ITEM_CATEGORY[item.name]}</div>
+                  <div className="product-name">{item.display_name}</div>
+                  <div className="product-price">{fmt(item.price)}</div>
+                  <div className={`stock-pill ${stock.cls}`}>{stock.text}</div>
+                  {inCart > 0 && <div className="in-cart-badge">{inCart} in cart</div>}
+                  <button
+                    className="add-btn"
+                    disabled={item.stock === 0}
+                    onClick={() => addToCart(item)}
+                  >
+                    {item.stock === 0 ? 'Unavailable' : '+ Add to Cart'}
+                  </button>
+                </div>
               </div>
             )
           })}

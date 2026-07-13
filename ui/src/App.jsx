@@ -61,7 +61,7 @@ const SCENARIOS = [
     desc: 'Restock an item',
     explanation: 'Directly adds stock to an item. Use this to reset inventory after order scenarios have depleted it.',
     params: [
-      { key: 'item_name', label: 'Item', type: 'select', default: 'headphones', options: ['headphones', 'keyboard', 'usb_hub', 'webcam', 'mouse_pad', 'desk_lamp', 'ssd'] },
+      { key: 'item_name', label: 'Item', type: 'select', default: 'headphones', options: ['headphones', 'keyboard', 'usb_hub', 'webcam', 'mouse_pad', 'desk_lamp', 'ssd', 'monitor', 'laptop_stand', 'wireless_charger', 'microphone', 'led_strip', 'controller', 'cable_pack', 'headphone_stand'] },
       { key: 'quantity', label: 'Quantity to add', default: 100, min: 1, max: 9999 },
     ],
   },
