@@ -7,3 +7,5 @@ __pycache__/
 .DS_Store
 node_modules/
 store/dist/
+.claude/
+node_modules/
