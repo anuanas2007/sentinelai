@@ -76,7 +76,7 @@ async def _fire_scenario(
                 *[
                     client.post(
                         f"{TARGET_BASE_URL}/orders",
-                        json={"user_id": uid, "item": "item_a", "quantity": 1},
+                        json={"user_id": uid, "item": "headphones", "quantity": 1, "payment_method": "credits"},
                     )
                     for _ in range(n)
                 ],
@@ -90,7 +90,7 @@ async def _fire_scenario(
                 json={"user_id": uid, "amount": amount},
             )
         elif scenario_id == "admin_restock":
-            name = item_name or "item_a"
+            name = item_name or "headphones"
             qty = quantity or 100
             await client.post(
                 f"{TARGET_BASE_URL}/admin/restock",
@@ -103,9 +103,10 @@ async def _fire_scenario(
                     client.post(
                         f"{TARGET_BASE_URL}/orders",
                         json={
-                            "user_id": random.choice([1, 2, 3]),
-                            "item": random.choice(["item_a", "item_b"]),
+                            "user_id": random.choice([1, 2, 3, 4, 5]),
+                            "item": random.choice(["headphones", "webcam"]),
                             "quantity": 1,
+                            "payment_method": "credits",
                         },
                     )
                     for _ in range(n)
@@ -115,9 +116,9 @@ async def _fire_scenario(
 
 
 async def _traffic_worker(stop_event: asyncio.Event) -> None:
-    VALID = [1, 2, 3]
+    VALID = [1, 2, 3, 4, 5]
     INVALID = [99, 100, 404]
-    ITEMS = ["item_a", "item_b", "item_c"]
+    ITEMS = ["headphones", "keyboard", "usb_hub", "webcam", "mouse_pad", "desk_lamp", "ssd"]
     ACTIONS = ["get_user", "get_user", "create_order", "create_order", "analytics"]
     async with httpx.AsyncClient(timeout=10.0) as client:
         while not stop_event.is_set():
