@@ -135,6 +135,13 @@ services:
     depends_on:
       - sentinel-agent
 
+  store:
+    build: ./store
+    ports:
+      - "5174:80"
+    depends_on:
+      - target-app
+
 volumes:
   log-data:
   postgres-data:
