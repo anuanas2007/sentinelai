@@ -6,6 +6,7 @@ import structlog
 import httpx
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from datetime import datetime
@@ -17,7 +18,6 @@ setup_logger()
 
 log = structlog.get_logger()
 
-ITEM_PRICE = 50.0
 EMAIL_SERVICE_URL = os.environ.get("EMAIL_SERVICE_URL", "http://localhost:8001")
 EMAIL_HEALTH_CHECK_INTERVAL = 60  # seconds between polls
 EMAIL_HEALTH_FAILURE_THRESHOLD = 3  # consecutive failures = confirmed outage, not noise
@@ -73,6 +73,15 @@ app = FastAPI(
     title="Target App",
     description="A realistic app that SentinelAI monitors",
     lifespan=lifespan,
+)
+
+# Store runs on a different port — CORS required so the browser can call
+# target-app directly. Single-user local demo so wide-open is fine.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -147,6 +156,7 @@ class OrderRequest(BaseModel):
     user_id: int
     item: str
     quantity: int
+    payment_method: str = "credits"  # "credits" | "card"
 
 
 class TopupRequest(BaseModel):
@@ -171,9 +181,40 @@ async def admin_restock(req: RestockRequest):
     return {"item_name": req.item_name, "new_stock": new_stock}
 
 
+@app.get("/items")
+async def list_items():
+    try:
+        return await db.get_all_items()
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e)
+
+
+@app.get("/users")
+async def list_users():
+    try:
+        return await db.get_all_users()
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/users/{user_id}/orders")
+async def get_user_orders(user_id: int):
+    try:
+        user = await db.get_user(user_id)
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e, user_id=user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User {user_id} not found")
+    try:
+        orders = await db.get_orders_by_user(user_id)
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e, user_id=user_id)
+    return orders
 
 
 @app.get("/users/{user_id}")
@@ -217,15 +258,18 @@ async def create_order(order: OrderRequest):
                   available=stock)
         raise HTTPException(status_code=400, detail=f"Insufficient stock for {order.item}")
 
-    # Check balance
-    total = ITEM_PRICE * order.quantity
-    balance = float(user["balance"])
-    if balance < total:
-        log.error("order_failed_insufficient_balance",
-                  user_id=order.user_id,
-                  required=total,
-                  available=balance)
-        raise HTTPException(status_code=400, detail="Insufficient balance")
+    total = float(item["price"]) * order.quantity
+
+    # Credits path only: check the user has enough store credits before charging.
+    # Card path skips this — the payment service is the only gate.
+    if order.payment_method == "credits":
+        balance = float(user["balance"])
+        if balance < total:
+            log.error("order_failed_insufficient_balance",
+                      user_id=order.user_id,
+                      required=total,
+                      available=balance)
+            raise HTTPException(status_code=400, detail="Insufficient store credits")
 
     # Charge before writing the order -- unlike the fire-and-forget email
     # confirmation below, payment genuinely must complete before we can
@@ -255,7 +299,9 @@ async def create_order(order: OrderRequest):
     # Write — deliberately not re-checking balance/stock here. See
     # docs/SECOND_ITERATION_ARCHITECTURE.md for why this gap is intentional.
     try:
-        new_balance = await db.apply_order(order.user_id, order.item, order.quantity, total)
+        new_balance = await db.apply_order(
+            order.user_id, order.item, order.quantity, total, order.payment_method
+        )
     except db.DBForeignKeyViolation as e:
         log.error("order_failed_fk_violation",
                   user_id=order.user_id, item=order.item, error=str(e))
@@ -276,14 +322,14 @@ async def create_order(order: OrderRequest):
     _background_tasks.add(task)
     task.add_done_callback(_on_background_task_done)
 
-    # Detected after the fact, not prevented — this is what makes the
-    # earlier non-atomic check-then-write race condition actually visible
-    # as an incident instead of a silent data-integrity bug.
-    if new_balance < 0:
+    # Credits only: detected after the fact, not prevented — this is what
+    # makes the non-atomic check-then-write race condition visible as an
+    # incident instead of a silent data-integrity bug.
+    if new_balance is not None and new_balance < 0:
         log.error("negative_balance_detected",
                   user_id=order.user_id, balance=new_balance)
 
-    return {"status": "success", "total_charged": total}
+    return {"status": "success", "total_charged": total, "payment_method": order.payment_method}
 
 
 @app.get("/analytics")

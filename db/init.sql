@@ -10,6 +10,8 @@ CREATE TABLE users (
 
 CREATE TABLE items (
     name TEXT PRIMARY KEY,
+    display_name TEXT NOT NULL,
+    price NUMERIC(10, 2) NOT NULL,
     stock INTEGER NOT NULL DEFAULT 0
 );
 
@@ -22,17 +24,25 @@ CREATE TABLE orders (
     item_name TEXT NOT NULL REFERENCES items(name),
     quantity INTEGER NOT NULL,
     total_charged NUMERIC(10, 2) NOT NULL,
+    payment_method TEXT NOT NULL DEFAULT 'credits',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Seed data matches the Week 1 in-memory USERS_DB / INVENTORY exactly,
--- so endpoint behaviour is unchanged after the Postgres swap.
+-- Bob has $0 credits so payment_cascade reliably produces order_failed_insufficient_balance.
+-- Webcam has 0 stock so payment_cascade reliably produces order_failed_insufficient_stock.
+-- Both are needed for the cascade pattern (3 alternating co-occurrences) to confirm.
 INSERT INTO users (name, email, balance) VALUES
-    ('Alice', 'alice@example.com', 500.00),
-    ('Bob', 'bob@example.com', 0.00),
-    ('Charlie', 'charlie@example.com', 250.00);
+    ('Alice Chen',   'alice@example.com',   800.00),
+    ('Bob Kumar',    'bob@example.com',       0.00),
+    ('Charlie Lee',  'charlie@example.com', 400.00),
+    ('Diana Park',   'diana@example.com',   600.00),
+    ('Ethan Wright', 'ethan@example.com',   150.00);
 
-INSERT INTO items (name, stock) VALUES
-    ('item_a', 10),
-    ('item_b', 0),
-    ('item_c', 5);
+INSERT INTO items (name, display_name, price, stock) VALUES
+    ('headphones', 'Wireless Headphones',  89.99,  8),
+    ('keyboard',   'Mechanical Keyboard', 129.00,  3),
+    ('usb_hub',    'USB-C Hub',            34.99, 12),
+    ('webcam',     'Webcam 1080p',         59.99,  0),
+    ('mouse_pad',  'Desk Mat XL',          24.99, 20),
+    ('desk_lamp',  'LED Desk Lamp',        44.99,  5),
+    ('ssd',        'Portable SSD 512GB',   79.99,  2);
