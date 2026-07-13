@@ -8,6 +8,7 @@ import { RatingButtons } from './RatingButtons'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:9000'
 const GRAFANA_URL = 'http://localhost:3000/d/sentinelai-pipeline?orgId=1&kiosk'
+const STORE_URL = 'http://localhost:5174'
 
 const SCENARIOS = [
   {
@@ -28,7 +29,7 @@ const SCENARIOS = [
     id: 'user_not_found',
     label: 'User not found',
     desc: 'Immediate escalation, no threshold',
-    explanation: 'Fetches a non-existent user ID from /users/{id}. Unlike threshold-based errors, user_not_found is an immediate classifier -- a single occurrence escalates straight to the AI investigator with no pattern needed. Use a user ID that does not exist in the database (anything above 3).',
+    explanation: 'Fetches a non-existent user ID from /users/{id}. Unlike threshold-based errors, user_not_found is an immediate classifier -- a single occurrence escalates straight to the AI investigator with no pattern needed. Use a user ID that does not exist in the database (anything above 5).',
     params: [
       { key: 'user_id', label: 'User ID (must not exist)', default: 9999, min: 100, max: 99999 },
       { key: 'calls', label: 'Number of calls', default: 1, min: 1, max: 5 },
@@ -37,20 +38,20 @@ const SCENARIOS = [
   {
     id: 'negative_balance',
     label: 'Negative balance',
-    desc: 'Race condition on balance check',
-    explanation: 'Sends many concurrent orders for the same user (item_a, $50 each). The balance check and deduction are not atomic -- multiple orders pass the check simultaneously, overdrawing the balance. Requires item_a to have stock > 0 (use "Add stock" first if needed) and the user to have sufficient balance (use "Add balance" first if needed).',
+    desc: 'Race condition on store credits',
+    explanation: 'Sends many concurrent orders for the same user (Wireless Headphones, $89.99 each, paid with store credits). The credits check and deduction are not atomic -- multiple orders pass the check simultaneously, overdrawing the balance. Requires headphones to have stock > 0 (use "Add stock" first if needed) and the user to have sufficient credits (use "Add credits" first if needed).',
     params: [
-      { key: 'user_id', label: 'User ID (1=Alice $500, 3=Charlie $250)', default: 1, min: 1, max: 3 },
+      { key: 'user_id', label: 'User ID (1=Alice $800, 3=Charlie $400, 4=Diana $600)', default: 1, min: 1, max: 5 },
       { key: 'concurrent', label: 'Concurrent orders', default: 30, min: 5, max: 100 },
     ],
   },
   {
     id: 'admin_topup',
-    label: 'Add balance',
-    desc: 'Top up a user\'s balance',
-    explanation: 'Directly adds balance to a user account. Use this to reset a user after the negative balance scenario has drained them.',
+    label: 'Add credits',
+    desc: 'Top up a user\'s store credits',
+    explanation: 'Directly adds store credits to a user account. Use this to reset a user after the negative balance scenario has drained them.',
     params: [
-      { key: 'user_id', label: 'User ID (1, 2, or 3)', default: 1, min: 1, max: 3 },
+      { key: 'user_id', label: 'User ID (1–5)', default: 1, min: 1, max: 5 },
       { key: 'top_up', label: 'Amount to add ($)', default: 500, min: 1, max: 9999 },
     ],
   },
@@ -60,7 +61,7 @@ const SCENARIOS = [
     desc: 'Restock an item',
     explanation: 'Directly adds stock to an item. Use this to reset inventory after order scenarios have depleted it.',
     params: [
-      { key: 'item_name', label: 'Item', type: 'select', default: 'item_a', options: ['item_a', 'item_b', 'item_c'] },
+      { key: 'item_name', label: 'Item', type: 'select', default: 'headphones', options: ['headphones', 'keyboard', 'usb_hub', 'webcam', 'mouse_pad', 'desk_lamp', 'ssd', 'monitor', 'laptop_stand', 'wireless_charger', 'microphone', 'led_strip', 'controller', 'cable_pack', 'headphone_stand'] },
       { key: 'quantity', label: 'Quantity to add', default: 100, min: 1, max: 9999 },
     ],
   },
@@ -355,7 +356,7 @@ function App() {
   const pipeline = useEventStream('/api/events/pipeline/history', '/api/events/pipeline/stream')
   const incidents = useMemo(() => groupIncidents(pipeline.events), [pipeline.events])
   const [expanded, setExpanded] = useState(null) // { incident, view }
-  const [tab, setTab] = useState('live') // 'live' | 'metrics'
+  const [tab, setTab] = useState('live') // 'live' | 'metrics' | 'store'
 
   return (
     <div className="app">
@@ -364,6 +365,7 @@ function App() {
         <nav className="tab-nav">
           <button className={`tab-btn${tab === 'live' ? ' tab-active' : ''}`} onClick={() => setTab('live')}>Live</button>
           <button className={`tab-btn${tab === 'metrics' ? ' tab-active' : ''}`} onClick={() => setTab('metrics')}>Metrics</button>
+          <button className="tab-btn" onClick={() => window.open(STORE_URL, '_blank')}>Store ↗</button>
         </nav>
         <ConnectionDot connected={activity.connected && pipeline.connected} />
       </header>

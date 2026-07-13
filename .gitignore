@@ -5,5 +5,7 @@ __pycache__/
 .env
 *.log
 .DS_Store
+node_modules/
+store/dist/
 .claude/
 node_modules/

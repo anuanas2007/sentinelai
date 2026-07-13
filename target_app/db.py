@@ -32,6 +32,10 @@ class DBForeignKeyViolation(Exception):
     pass
 
 
+class DBUniqueViolation(Exception):
+    pass
+
+
 async def init_pool():
     global _pool
     _pool = await asyncpg.create_pool(
@@ -80,6 +84,18 @@ async def hold_connection():
         yield conn
 
 
+async def create_user(name: str, email: str, balance: float = 200.0) -> dict:
+    async with _connection() as conn:
+        try:
+            row = await conn.fetchrow(
+                "INSERT INTO users (name, email, balance) VALUES ($1, $2, $3) RETURNING id, name, email, balance",
+                name, email, balance,
+            )
+            return dict(row)
+        except asyncpg.exceptions.UniqueViolationError:
+            raise DBUniqueViolation(f"Email already in use: {email}")
+
+
 async def get_user(user_id: int) -> dict | None:
     async with _connection() as conn:
         row = await conn.fetchrow(
@@ -88,12 +104,40 @@ async def get_user(user_id: int) -> dict | None:
         return dict(row) if row else None
 
 
+async def get_all_users() -> list[dict]:
+    async with _connection() as conn:
+        rows = await conn.fetch("SELECT id, name, email, balance FROM users ORDER BY id")
+        return [dict(r) for r in rows]
+
+
 async def get_item(item_name: str) -> dict | None:
     async with _connection() as conn:
         row = await conn.fetchrow(
-            "SELECT name, stock FROM items WHERE name = $1", item_name
+            "SELECT name, display_name, price, stock FROM items WHERE name = $1", item_name
         )
         return dict(row) if row else None
+
+
+async def get_all_items() -> list[dict]:
+    async with _connection() as conn:
+        rows = await conn.fetch(
+            "SELECT name, display_name, price, stock FROM items ORDER BY display_name"
+        )
+        return [dict(r) for r in rows]
+
+
+async def get_orders_by_user(user_id: int) -> list[dict]:
+    async with _connection() as conn:
+        rows = await conn.fetch(
+            """SELECT o.id, o.item_name, i.display_name, o.quantity,
+                      o.total_charged, o.payment_method, o.created_at
+               FROM orders o
+               JOIN items i ON i.name = o.item_name
+               WHERE o.user_id = $1
+               ORDER BY o.created_at DESC""",
+            user_id,
+        )
+        return [dict(r) for r in rows]
 
 
 async def count_users() -> int:
@@ -106,7 +150,7 @@ async def total_inventory() -> int:
         return await conn.fetchval("SELECT coalesce(sum(stock), 0) FROM items")
 
 
-async def apply_order(user_id: int, item_name: str, quantity: int, total_charged: float) -> float:
+async def apply_order(user_id: int, item_name: str, quantity: int, total_charged: float, payment_method: str = "credits") -> dict:
     """
     Deducts stock and balance, then records the order.
 
@@ -117,34 +161,51 @@ async def apply_order(user_id: int, item_name: str, quantity: int, total_charged
     user's balance and the item's stock *before* calling this function,
     and that earlier read is never re-validated inside this same
     transaction. Two concurrent orders can both pass that earlier check
-    and both land here, overdrawing the balance. This is intentional —
-    see docs/SECOND_ITERATION_ARCHITECTURE.md for why.
+    and both land here, overdrawing the balance or stock. This is
+    intentional — see docs/SECOND_ITERATION_ARCHITECTURE.md for why.
     """
     async with _connection() as conn:
         try:
             async with conn.transaction():
-                await conn.execute(
-                    "UPDATE items SET stock = stock - $1 WHERE name = $2",
+                # RETURNING lets callers detect negative stock after the fact
+                # (same pattern as negative balance detection below).
+                new_stock = await conn.fetchval(
+                    "UPDATE items SET stock = stock - $1 WHERE name = $2 RETURNING stock",
                     quantity, item_name,
                 )
-                # RETURNING lets the caller see the post-write balance without
-                # a second query — used to detect the race condition's effect
-                # (a negative balance) after the fact, not to prevent it.
-                new_balance = await conn.fetchval(
-                    "UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance",
-                    total_charged, user_id,
-                )
+                # Card payments don't touch the balance — only credits path deducts.
+                # RETURNING lets the caller detect the race condition (negative balance)
+                # after the fact without a second query; returns None for card payments.
+                if payment_method == "credits":
+                    new_balance = await conn.fetchval(
+                        "UPDATE users SET balance = balance - $1 WHERE id = $2 RETURNING balance",
+                        total_charged, user_id,
+                    )
+                else:
+                    new_balance = None
                 await conn.execute(
-                    """INSERT INTO orders (user_id, item_name, quantity, total_charged)
-                       VALUES ($1, $2, $3, $4)""",
-                    user_id, item_name, quantity, total_charged,
+                    """INSERT INTO orders (user_id, item_name, quantity, total_charged, payment_method)
+                       VALUES ($1, $2, $3, $4, $5)""",
+                    user_id, item_name, quantity, total_charged, payment_method,
                 )
         except asyncpg.exceptions.ForeignKeyViolationError as e:
             raise DBForeignKeyViolation(str(e))
         except asyncpg.exceptions.DeadlockDetectedError as e:
             raise DBDeadlock(str(e))
 
-    return float(new_balance)
+    return {
+        "new_balance": float(new_balance) if new_balance is not None else None,
+        "new_stock": int(new_stock) if new_stock is not None else 0,
+    }
+
+
+async def set_stock(item_name: str, stock: int) -> int:
+    async with _connection() as conn:
+        new_stock = await conn.fetchval(
+            "UPDATE items SET stock = $1 WHERE name = $2 RETURNING stock",
+            stock, item_name,
+        )
+        return int(new_stock) if new_stock is not None else 0
 
 
 async def topup_balance(user_id: int, amount: float) -> float:
