@@ -140,6 +140,120 @@ input[type="radio"] { accent-color: var(--accent); }
 .credits-val { font-size: 15px; font-weight: 700; color: var(--green); }
 .credits-lbl { font-size: 11px; color: var(--text-secondary); }
 
+/* ── Login form ─────────────────────────────────────── */
+.login-card-heading {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.field-group { display: flex; flex-direction: column; gap: 6px; }
+
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.field-input {
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  color: var(--text);
+  font-size: 14px;
+  font-family: inherit;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+
+.field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.field-input::placeholder { color: var(--text-muted); }
+
+.login-error {
+  font-size: 13px;
+  color: var(--red);
+  background: var(--red-bg);
+  border: 1px solid rgba(239,68,68,0.2);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+
+.demo-hint-section { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+
+.demo-hint-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.demo-hint-toggle:hover { color: var(--text-secondary); }
+
+.demo-accounts {
+  width: 100%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.demo-account-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 11px 14px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.demo-account-row:last-of-type { border-bottom: none; }
+.demo-account-row:hover { background: rgba(124,58,237,0.08); }
+
+.demo-account-info { display: flex; flex-direction: column; gap: 2px; }
+.demo-account-name { font-size: 13px; font-weight: 600; }
+.demo-account-email { font-size: 11px; color: var(--text-secondary); }
+.demo-account-balance { font-size: 12px; font-weight: 700; color: var(--green); }
+
+.demo-password-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.demo-password-note code {
+  background: var(--surface);
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
 /* ── Header ─────────────────────────────────────────── */
 .header {
   display: flex;
