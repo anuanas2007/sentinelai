@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AppProvider } from './context/AppContext'
 import Layout from './components/Layout'
 import LoginPage from './pages/LoginPage'
+import SignupPage from './pages/SignupPage'
 import ShopPage from './pages/ShopPage'
 import CartPage from './pages/CartPage'
 import CheckoutPage from './pages/CheckoutPage'
@@ -15,6 +16,7 @@ export default function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
           <Route element={<Layout />}>
             <Route path="/shop" element={<ShopPage />} />
             <Route path="/cart" element={<CartPage />} />

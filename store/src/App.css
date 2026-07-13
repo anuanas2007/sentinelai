@@ -254,6 +254,34 @@ input[type="radio"] { accent-color: var(--accent); }
   font-size: 11px;
 }
 
+.signup-welcome-note {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: var(--green-bg);
+  border: 1px solid rgba(34,197,94,0.15);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+}
+
+.signup-welcome-note strong { color: var(--green); }
+
+.auth-switch {
+  text-align: center;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.auth-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.auth-link:hover { text-decoration: underline; }
+
 /* ── Header ─────────────────────────────────────────── */
 .header {
   display: flex;

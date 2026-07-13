@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import { fmt } from '../utils'
 
@@ -20,13 +20,17 @@ export default function LoginPage() {
   function handleSubmit(e) {
     e.preventDefault()
     setError('')
-    if (password !== DEMO_PASSWORD) {
-      setError('Incorrect password.')
-      return
-    }
     const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase())
     if (!user) {
       setError('No account found with that email.')
+      return
+    }
+    // Seeded demo accounts use password123; signed-up accounts store their
+    // password in sessionStorage (demo-only — no real auth server).
+    const stored = sessionStorage.getItem(`pw:${user.id}`)
+    const expected = stored ?? DEMO_PASSWORD
+    if (password !== expected) {
+      setError('Incorrect password.')
       return
     }
     setActiveUser(user)
@@ -86,6 +90,10 @@ export default function LoginPage() {
             {users.length ? 'Sign In' : 'Loading...'}
           </button>
         </form>
+
+        <p className="auth-switch">
+          Don't have an account? <Link to="/signup" className="auth-link">Create one</Link>
+        </p>
 
         <div className="demo-hint-section">
           <button

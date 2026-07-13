@@ -32,6 +32,10 @@ class DBForeignKeyViolation(Exception):
     pass
 
 
+class DBUniqueViolation(Exception):
+    pass
+
+
 async def init_pool():
     global _pool
     _pool = await asyncpg.create_pool(
@@ -78,6 +82,18 @@ async def hold_connection():
     """
     async with _connection() as conn:
         yield conn
+
+
+async def create_user(name: str, email: str, balance: float = 200.0) -> dict:
+    async with _connection() as conn:
+        try:
+            row = await conn.fetchrow(
+                "INSERT INTO users (name, email, balance) VALUES ($1, $2, $3) RETURNING id, name, email, balance",
+                name, email, balance,
+            )
+            return dict(row)
+        except asyncpg.exceptions.UniqueViolationError:
+            raise DBUniqueViolation(f"Email already in use: {email}")
 
 
 async def get_user(user_id: int) -> dict | None:

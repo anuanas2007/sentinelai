@@ -152,6 +152,12 @@ def _on_background_task_done(task: "asyncio.Task") -> None:
                   error=str(exc), error_type=type(exc).__name__)
 
 
+class SignupRequest(BaseModel):
+    name: str
+    email: str
+    password: str  # accepted but not stored — demo auth only
+
+
 class OrderRequest(BaseModel):
     user_id: int
     item: str
@@ -167,6 +173,18 @@ class TopupRequest(BaseModel):
 class RestockRequest(BaseModel):
     item_name: str
     quantity: int
+
+
+@app.post("/users", status_code=201)
+async def signup(req: SignupRequest):
+    try:
+        user = await db.create_user(req.name, req.email)
+        log.info("user_created", user_id=user["id"])
+        return user
+    except db.DBUniqueViolation:
+        raise HTTPException(status_code=409, detail="Email already in use.")
+    except (db.DBPoolExhausted, db.DBConnectionError) as e:
+        _handle_db_exception(e)
 
 
 @app.post("/admin/topup")
