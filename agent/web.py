@@ -157,6 +157,7 @@ async def _traffic_worker(stop_event: asyncio.Event) -> None:
                             "user_id": random.choice(VALID),
                             "item": random.choice(ITEMS),
                             "quantity": random.randint(1, 3),
+                            "payment_method": random.choice(["credits", "card"]),
                         },
                     )
                 else:

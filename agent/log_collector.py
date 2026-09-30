@@ -341,8 +341,6 @@ def watch_log_file(log_path: str):
     SentinelAI has zero control over the target app — it only observes.
     This is the correct monitoring architecture.
 
-    In Week 2 this function is replaced by Docker log stream reader —
-    same concept, no file needed, cleaner separation.
     """
     print(f"[SentinelAI] Watching log file: {log_path}")
     print(f"[SentinelAI] Ring buffer size : {LOG_BUFFER_SIZE} lines")

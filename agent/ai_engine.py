@@ -40,7 +40,7 @@ import metrics
 # and the planned switch to git-based retrieval.
 TARGET_APP_SRC = os.environ.get("TARGET_APP_SRC", "/app/target_app_src")
 
-LLM_MODEL = "gpt-4o-mini"  # cheap model — root cause text generation, not heavy code synthesis
+LLM_MODEL = os.environ.get("SENTINEL_LLM_MODEL", "gpt-4o-mini")
 
 # Set at the start of each analyze_incident() call, read by every tool's
 # _run() and the stage callback below to tag their events with the
