@@ -5,7 +5,10 @@ import threading
 import uuid
 from collections import deque
 from typing import Optional
-from error_detector import ErrorDetector, Incident, WINDOW_SECONDS
+from error_detector import (
+    ErrorDetector, Incident,
+    WINDOW_SECONDS, INCIDENT_THRESHOLD, WARNING_THRESHOLD, AI_COOLDOWN_SECONDS,
+)
 from log_parsing import parse_log_line, is_error
 import ai_engine
 import redis_store
@@ -89,6 +92,36 @@ EVENT_SPECIFIC_CONTEXT = {
     "background_task_failed": _DEPENDENCY_HINT,
     "email_service_unreachable": _DEPENDENCY_HINT,
 }
+
+
+def _routing_reason(incident: Incident) -> str:
+    ev = incident.trigger_event
+    if incident.requires_ai:
+        if ev.error_class == "threshold":
+            return (
+                f"Pattern confirmed: {incident.error_count} occurrences of "
+                f"'{ev.event}' in {WINDOW_SECONDS}s — queued for AI analysis"
+            )
+        return f"Immediate escalation on first occurrence of '{ev.event}' — queued for AI analysis"
+    if incident.ai_worthy and incident.severity != "warning":
+        return (
+            f"'{ev.event}' is AI-worthy but was already analyzed within "
+            f"the last {AI_COOLDOWN_SECONDS}s — cooldown active"
+        )
+    if incident.ai_worthy:
+        return (
+            f"Pattern forming: {incident.error_count} of {INCIDENT_THRESHOLD} "
+            f"occurrences of '{ev.event}' in {WINDOW_SECONDS}s — watching, not yet dispatching"
+        )
+    if ev.error_class == "immediate":
+        return (
+            f"Immediate escalation on first occurrence of '{ev.event}' — "
+            f"cause is in the log line, no AI needed"
+        )
+    return (
+        f"Pattern forming: {incident.error_count} of {INCIDENT_THRESHOLD} "
+        f"occurrences of '{ev.event}' in {WINDOW_SECONDS}s"
+    )
 
 
 def _build_incident_summary(incident: Incident) -> str:
@@ -216,15 +249,39 @@ def handle_error(error_entry: dict):
         # losing it shouldn't take down real-time alerting on top of it.
         print(f"⚠️  [SentinelAI] Failed to write incident to Redis: {e}")
 
+    cascade_upstream = (
+        {
+            "event": incident.cascade_peer_event.event,
+            "context": incident.cascade_peer_event.context,
+        }
+        if incident.cascade_peer_event else None
+    )
+    recent_logs = [
+        {
+            "level": e.get("level", "info"),
+            "event": e.get("event", ""),
+            "timestamp": e.get("timestamp", "")[:19],
+        }
+        for e in incident.context_window[-10:]
+    ]
     events.push_pipeline_event(
         "incident_detected",
         incident_id=incident_id,
         incident_event=incident.trigger_event.event,
         severity=incident.severity,
         error_count=incident.error_count,
+        error_class=incident.trigger_event.error_class,
+        window_seconds=WINDOW_SECONDS,
+        incident_threshold=INCIDENT_THRESHOLD,
+        warning_threshold=WARNING_THRESHOLD,
+        context=incident.trigger_event.context,
+        log_line=error_entry.get("_raw", ""),
         pattern=incident.pattern,
+        cascade_upstream=cascade_upstream,
+        routing_reason=_routing_reason(incident),
         requires_ai=incident.requires_ai,
         ai_worthy=incident.ai_worthy,
+        recent_logs=recent_logs,
     )
 
     metrics.incidents_total.labels(
@@ -373,7 +430,7 @@ def watch_log_file(log_path: str):
 
 
 if __name__ == "__main__":
-    # uvicorn now owns the main thread (see web.py) -- the watcher loop
+    # uvicorn now owns the main thread (see server.py) -- the watcher loop
     # that used to block here, and the AI worker that already ran in
     # its own thread, both move to background threads instead. Neither
     # changes behavior, only which thread runs them.
