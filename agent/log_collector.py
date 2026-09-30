@@ -407,7 +407,7 @@ if __name__ == "__main__":
     # its own thread, both move to background threads instead. Neither
     # changes behavior, only which thread runs them.
     import uvicorn
-    import web
+    import server
 
     if os.environ.get("OPENAI_API_KEY"):
         threading.Thread(target=ai_worker_loop, daemon=True).start()
@@ -419,4 +419,4 @@ if __name__ == "__main__":
     LOG_PATH = os.environ.get("LOG_PATH", "logs/app.log")
     threading.Thread(target=watch_log_file, args=(LOG_PATH,), daemon=True).start()
 
-    uvicorn.run(web.app, host="0.0.0.0", port=9000)
+    uvicorn.run(server.app, host="0.0.0.0", port=9000)
