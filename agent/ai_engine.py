@@ -26,6 +26,7 @@ analyze_incident() kicks off the crew and returns the fix agent's
 output as plain text — that's the only thing the caller sees.
 """
 import os
+import re
 import time
 from pydantic import BaseModel, Field
 from crewai import Agent, Task, Crew, Process
@@ -48,6 +49,10 @@ LLM_MODEL = os.environ.get("SENTINEL_LLM_MODEL", "gpt-4o-mini")
 # (not per-call state) only because ai_worker_loop processes incidents
 # strictly one at a time -- see log_collector.py.
 _current_incident_id: str = ""
+_files_read_this_run: list = []
+# Keyed by stage_label, set when stage_started is pushed — read in the
+# stage callback to measure actual execution time, not build time.
+_stage_start_times: dict = {}
 
 
 class ListSourceFilesTool(BaseTool):
@@ -93,6 +98,8 @@ class ReadSourceFileTool(BaseTool):
             return result
         with open(path, "r") as f:
             content = f.read()
+        if safe_name not in _files_read_this_run:
+            _files_read_this_run.append(safe_name)
         # Full content goes back to the model; the event log only gets a
         # preview, so the live feed doesn't balloon with entire files.
         preview = content[:1000] + ("... [truncated]" if len(content) > 1000 else "")
@@ -196,22 +203,70 @@ class GetSimilarIncidentsTool(BaseTool):
         return result
 
 
-def _stage_callback(stage_label: str, metric_stage: str):
+def _parse_investigation_output(text: str) -> dict:
+    result: dict = {}
+
+    # cascade_verdict must be the first line, exactly as the task instructs
+    first_line = text.strip().splitlines()[0].strip() if text.strip() else ""
+    if re.match(r"[Cc]ascade\s+verdict\s*:\s*(YES|NO)", first_line):
+        result["cascade_verdict"] = "YES" if "YES" in first_line.upper() else "NO"
+    else:
+        result["cascade_verdict"] = None
+
+    # confidence: matches "Confidence: 0.9", "confidence score: 0.85", "confidence (0.9)"
+    m = re.search(r"[Cc]onfidence[^0-9]*([0-9]\.[0-9]+)", text)
+    if m:
+        try:
+            val = float(m.group(1))
+            result["confidence"] = round(val, 2) if 0.0 <= val <= 1.0 else None
+        except ValueError:
+            result["confidence"] = None
+    else:
+        result["confidence"] = None
+
+    return result
+
+
+def _push_stage_started(stage_label: str) -> None:
+    _stage_start_times[stage_label] = time.time()
+    events.push_pipeline_event(
+        "stage_started", incident_id=_current_incident_id, stage=stage_label
+    )
+
+
+def _stage_callback(stage_label: str, metric_stage: str, next_stage_label: str = None):
     """
     Prints a clean, labeled block to stdout when a task finishes --
     visible in `docker compose logs sentinel-agent`, distinct from
     CrewAI's own raw verbose debug output (which stays off by default).
     """
-    start = time.time()
-
     def callback(output):
-        metrics.pipeline_duration_seconds.labels(stage=metric_stage).observe(time.time() - start)
+        start = _stage_start_times.get(stage_label, time.time())
+        duration = time.time() - start
+        metrics.pipeline_duration_seconds.labels(stage=metric_stage).observe(duration)
         text = getattr(output, "raw", None) or str(output)
         print(f"\n🔎 STAGE: {stage_label}", flush=True)
         print("-" * 60)
         print(text)
         print("-" * 60, flush=True)
-        events.push_pipeline_event("stage_complete", incident_id=_current_incident_id, stage=stage_label, output=text)
+
+        extra: dict = {}
+        if metric_stage == "investigation":
+            extra = _parse_investigation_output(text)
+            extra["files_read"] = list(_files_read_this_run)
+
+        events.push_pipeline_event(
+            "stage_complete",
+            incident_id=_current_incident_id,
+            stage=stage_label,
+            output=text,
+            duration_seconds=round(duration, 1),
+            **extra,
+        )
+
+        if next_stage_label:
+            _push_stage_started(next_stage_label)
+
     return callback
 
 
@@ -301,7 +356,11 @@ def _build_crew(incident_summary: str) -> tuple[Crew, Task]:
             "evidence is insufficient."
         ),
         agent=investigator_agent,
-        callback=_stage_callback("Investigation (file retrieval + root cause)", "investigation"),
+        callback=_stage_callback(
+            "Investigation (file retrieval + root cause)",
+            "investigation",
+            next_stage_label="Fix proposal (human review required)",
+        ),
     )
 
     fix_task = Task(
@@ -354,10 +413,12 @@ def analyze_incident(incident_summary: str, event_name: str, incident_id: str = 
     not passed into the crew -- it's read by the tools/stage callback
     via the module-level _current_incident_id, set here.
     """
-    global _current_incident_id
+    global _current_incident_id, _files_read_this_run
     _current_incident_id = incident_id
+    _files_read_this_run = []
 
     crew, investigator_task = _build_crew(incident_summary)
+    _push_stage_started("Investigation (file retrieval + root cause)")
     result = crew.kickoff()
 
     # Secondary to the main result — a storage hiccup here shouldn't
