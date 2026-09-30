@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import { useApp } from '../context/AppContext'
-import { ITEM_EMOJI, ITEM_CATEGORY, fmt, stockLabel } from '../utils'
+import { ITEM_IMAGE, ITEM_CATEGORY, fmt, stockLabel } from '../utils'
 
 export default function ShopPage() {
   const { items, cart, addToCart, changeQty, loadError } = useApp()
+  const [filter, setFilter] = useState('All')
 
   if (loadError) {
     return (
-      <div style={{ padding: '40px 0', textAlign: 'center' }}>
+      <div style={{ padding: '60px 0', textAlign: 'center' }}>
         <p style={{ color: 'var(--red)', fontWeight: 600, fontSize: 16 }}>
           We're having trouble loading products right now.
         </p>
@@ -17,15 +18,18 @@ export default function ShopPage() {
       </div>
     )
   }
-  const [filter, setFilter] = useState('All')
+
   const categories = ['All', ...new Set(Object.values(ITEM_CATEGORY))]
   const filtered = filter === 'All' ? items : items.filter(i => ITEM_CATEGORY[i.name] === filter)
 
   return (
     <div className="shop-page">
-      <div className="shop-hero">
-        <h2 className="shop-hero-title">Tech Essentials</h2>
-        <p className="shop-hero-sub">Quality peripherals, accessories, and gear</p>
+      <div className="shop-banner">
+        <div className="shop-banner-text">
+          <div className="shop-banner-tag">New arrivals</div>
+          <div className="shop-banner-title">Tech Essentials</div>
+          <div className="shop-banner-sub">Premium peripherals, accessories, and gear</div>
+        </div>
       </div>
 
       <div className="shop-filters">
@@ -41,18 +45,21 @@ export default function ShopPage() {
       </div>
 
       {filtered.length === 0 ? (
-        <p className="shop-empty">No products found.</p>
+        <p className="shop-empty">No products in this category.</p>
       ) : (
         <div className="product-grid">
           {filtered.map(item => {
             const stock = stockLabel(item.stock)
             const inCart = cart[item.name] ?? 0
-            const catClass = `img-${(ITEM_CATEGORY[item.name] || 'accessories').toLowerCase()}`
             return (
               <div key={item.name} className={`product-card${item.stock === 0 ? ' product-out' : ''}`}>
-                <div className={`product-img ${catClass}`}>
-                  <span className="product-emoji">{ITEM_EMOJI[item.name] ?? '📦'}</span>
-                </div>
+                <img
+                  className="product-img"
+                  src={ITEM_IMAGE[item.name]}
+                  alt={item.display_name}
+                  loading="lazy"
+                  onError={e => { e.target.style.background = '#f1f5f9' }}
+                />
                 <div className="product-card-body">
                   <div className="product-category">{ITEM_CATEGORY[item.name]}</div>
                   <div className="product-name">{item.display_name}</div>
@@ -70,7 +77,7 @@ export default function ShopPage() {
                       disabled={item.stock === 0}
                       onClick={() => addToCart(item)}
                     >
-                      {item.stock === 0 ? 'Unavailable' : '+ Add to Cart'}
+                      {item.stock === 0 ? 'Unavailable' : 'Add to Cart'}
                     </button>
                   )}
                 </div>

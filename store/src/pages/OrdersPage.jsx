@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useApp } from '../context/AppContext'
-import { ITEM_EMOJI, fmt, API } from '../utils'
+import { ITEM_IMAGE, fmt, API } from '../utils'
 
 export default function OrdersPage() {
   const { activeUser } = useApp()
@@ -18,20 +18,39 @@ export default function OrdersPage() {
   return (
     <div className="orders-page">
       <h2 className="page-title">Order History</h2>
-      {orders === null && <p className="page-loading">Loading orders...</p>}
-      {orders?.length === 0 && <p className="page-empty">No orders yet. Go shop!</p>}
+
+      {orders === null && (
+        <p className="page-loading">Loading orders…</p>
+      )}
+
+      {orders?.length === 0 && (
+        <p className="page-empty">No orders yet. Start shopping!</p>
+      )}
+
       {orders && orders.length > 0 && (
         <div className="orders-list">
           {orders.map(o => (
             <div key={o.id} className="order-card">
-              <div className="order-card-emoji">{ITEM_EMOJI[o.item_name] ?? '📦'}</div>
+              <img
+                className="order-card-img"
+                src={ITEM_IMAGE[o.item_name]}
+                alt={o.display_name}
+                loading="lazy"
+              />
               <div className="order-card-info">
                 <div className="order-card-name">{o.display_name}</div>
-                <div className="order-card-meta">Qty {o.quantity} · {o.payment_method === 'card' ? 'Credit Card' : 'Store Credits'}</div>
+                <div className="order-card-meta">
+                  Qty {o.quantity} · {o.payment_method === 'card' ? 'Credit Card' : 'Store Credits'}
+                </div>
               </div>
               <div className="order-card-right">
                 <div className="order-card-total">{fmt(o.total_charged)}</div>
-                <div className="order-card-date">{new Date(o.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</div>
+                <div className="order-card-date">
+                  {new Date(o.created_at).toLocaleDateString('en-US', {
+                    month: 'short', day: 'numeric',
+                    hour: '2-digit', minute: '2-digit',
+                  })}
+                </div>
               </div>
             </div>
           ))}

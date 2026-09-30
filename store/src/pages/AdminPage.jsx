@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { API, AGENT_API, ITEM_EMOJI, fmt } from '../utils'
+import { API, AGENT_API, ITEM_IMAGE, fmt } from '../utils'
 
 const SCENARIOS = [
   { id: 'negative_balance', label: 'Negative Balance Race', emoji: '💸', desc: 'Alice buys headphones with credits × 30 concurrent — overshoots balance', color: 'red' },
@@ -43,7 +43,7 @@ function InventoryTable({ items, onRefresh }) {
           {items.map(item => (
             <tr key={item.name} className={item.stock <= 0 ? 'row-danger' : item.stock <= 3 ? 'row-warn' : ''}>
               <td className="admin-item-cell">
-                <span className="admin-item-emoji">{ITEM_EMOJI[item.name] ?? '📦'}</span>
+                <img className="admin-item-img" src={ITEM_IMAGE[item.name]} alt={item.display_name} />
                 <span>{item.display_name}</span>
               </td>
               <td className={`admin-stock ${item.stock < 0 ? 'stock-negative' : item.stock === 0 ? 'stock-zero' : item.stock <= 3 ? 'stock-low' : ''}`}>

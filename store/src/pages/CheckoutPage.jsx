@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
-import { ITEM_EMOJI, fmt, API } from '../utils'
+import { ITEM_IMAGE, fmt, API } from '../utils'
 
 export default function CheckoutPage() {
   const { cart, items, activeUser, clearCart, setLastOrder, refreshData } = useApp()
@@ -61,7 +61,7 @@ export default function CheckoutPage() {
               <div className="address-name">{activeUser.name}</div>
               <div className="address-line">123 Demo Street</div>
               <div className="address-line">San Francisco, CA 94107</div>
-              <div className="address-tag">Default address</div>
+              <span className="address-tag">Default address</span>
             </div>
           </div>
 
@@ -71,17 +71,19 @@ export default function CheckoutPage() {
               <label className={`pay-option${payMethod === 'credits' ? ' pay-selected' : ''}`}>
                 <input type="radio" value="credits" checked={payMethod === 'credits'} onChange={() => setPayMethod('credits')} />
                 <div className="pay-option-body">
-                  <div className="pay-option-name">💳 Store Credits</div>
+                  <div className="pay-option-name">Store Credits</div>
                   <div className="pay-option-detail">
                     Available: {fmt(activeUser.balance)}
-                    {subtotal > activeUser.balance && <span className="pay-warning"> — insufficient for this order</span>}
+                    {subtotal > activeUser.balance && (
+                      <span className="pay-warning"> — insufficient for this order</span>
+                    )}
                   </div>
                 </div>
               </label>
               <label className={`pay-option${payMethod === 'card' ? ' pay-selected' : ''}`}>
                 <input type="radio" value="card" checked={payMethod === 'card'} onChange={() => setPayMethod('card')} />
                 <div className="pay-option-body">
-                  <div className="pay-option-name">💳 Credit Card</div>
+                  <div className="pay-option-name">Credit Card</div>
                   <div className="pay-option-detail">Visa ending in 4242</div>
                 </div>
               </label>
@@ -90,12 +92,14 @@ export default function CheckoutPage() {
 
           {errors.length > 0 && (
             <div className="checkout-errors">
-              {errors.map((e, i) => <div key={i} className="error-line">✗ {e}</div>)}
+              {errors.map((e, i) => (
+                <div key={i} className="error-line">✗ {e}</div>
+              ))}
             </div>
           )}
 
-          <button className="btn-primary btn-large btn-full" onClick={placeOrder} disabled={loading}>
-            {loading ? 'Processing...' : `Place Order · ${fmt(subtotal)}`}
+          <button className="btn-primary btn-large btn-full" onClick={placeOrder} disabled={loading || cartItems.length === 0}>
+            {loading ? 'Processing…' : `Place Order · ${fmt(subtotal)}`}
           </button>
         </div>
 
@@ -104,7 +108,7 @@ export default function CheckoutPage() {
             <h3 className="section-title">Order Summary</h3>
             {cartItems.map(i => (
               <div key={i.name} className="summary-item">
-                <span className="summary-item-emoji">{ITEM_EMOJI[i.name] ?? '📦'}</span>
+                <img className="summary-item-img" src={ITEM_IMAGE[i.name]} alt={i.display_name} />
                 <span className="summary-item-name">{i.display_name} × {i.qty}</span>
                 <span className="summary-item-price">{fmt(i.price * i.qty)}</span>
               </div>

@@ -1,6 +1,6 @@
 import { useNavigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
-import { ITEM_EMOJI, fmt } from '../utils'
+import { ITEM_IMAGE, fmt } from '../utils'
 
 export default function CartPage() {
   const { cart, items, changeQty, removeFromCart } = useApp()
@@ -15,7 +15,10 @@ export default function CartPage() {
       <div className="cart-page">
         <h2 className="page-title">Your Cart</h2>
         <div className="cart-empty">
-          <div className="cart-empty-icon">🛒</div>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" style={{ color: 'var(--text-muted)' }}>
+            <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+          </svg>
           <p>Your cart is empty.</p>
           <button className="btn-primary" onClick={() => navigate('/shop')}>Continue Shopping</button>
         </div>
@@ -30,7 +33,12 @@ export default function CartPage() {
         <div className="cart-items">
           {cartItems.map(item => (
             <div key={item.name} className="cart-row">
-              <div className="cart-row-emoji">{ITEM_EMOJI[item.name] ?? '📦'}</div>
+              <img
+                className="cart-row-img"
+                src={ITEM_IMAGE[item.name]}
+                alt={item.display_name}
+                loading="lazy"
+              />
               <div className="cart-row-info">
                 <div className="cart-row-name">{item.display_name}</div>
                 <div className="cart-row-price">{fmt(item.price)} each</div>
@@ -61,8 +69,8 @@ export default function CartPage() {
             <span>Total</span>
             <span>{fmt(subtotal)}</span>
           </div>
-          <button className="btn-primary btn-full" onClick={() => navigate('/checkout')}>
-            Proceed to Checkout →
+          <button className="btn-primary btn-full btn-large" onClick={() => navigate('/checkout')}>
+            Proceed to Checkout
           </button>
           <button className="btn-ghost btn-full" onClick={() => navigate('/shop')}>
             Continue Shopping

@@ -1,6 +1,7 @@
 import { Outlet, Navigate } from 'react-router-dom'
 import { useApp } from '../context/AppContext'
 import Header from './Header'
+import ErrorTriggerPanel from './ErrorTriggerPanel'
 
 export default function Layout() {
   const { activeUser } = useApp()
@@ -11,6 +12,7 @@ export default function Layout() {
       <main className="main-content">
         <Outlet />
       </main>
+      <ErrorTriggerPanel />
     </>
   )
 }

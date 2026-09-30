@@ -10,9 +10,9 @@ const ADMIN_PASSWORD = 'admin123'
 export default function LoginPage() {
   const { users, activeUser, setActiveUser } = useApp()
   const navigate = useNavigate()
-  const [email, setEmail] = useState('')
+  const [email, setEmail]       = useState('')
   const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
+  const [error, setError]       = useState('')
   const [showHints, setShowHints] = useState(false)
 
   useEffect(() => {
@@ -28,18 +28,10 @@ export default function LoginPage() {
       return
     }
     const user = users.find(u => u.email.toLowerCase() === email.trim().toLowerCase())
-    if (!user) {
-      setError('No account found with that email.')
-      return
-    }
-    // Seeded demo accounts use password123; signed-up accounts store their
-    // password in sessionStorage (demo-only — no real auth server).
+    if (!user) { setError('No account found with that email.'); return }
     const stored = sessionStorage.getItem(`pw:${user.id}`)
     const expected = stored ?? DEMO_PASSWORD
-    if (password !== expected) {
-      setError('Incorrect password.')
-      return
-    }
+    if (password !== expected) { setError('Incorrect password.'); return }
     setActiveUser(user)
     navigate('/shop')
   }
@@ -53,78 +45,102 @@ export default function LoginPage() {
 
   return (
     <div className="login-page">
-      <div className="login-brand">
-        <span className="login-logo">🛍</span>
-        <h1 className="login-title">TechNest</h1>
-        <p className="login-tagline">Premium tech, delivered fast.</p>
+      <div className="login-left">
+        <div className="login-left-logo">TechNest.</div>
+        <div className="login-left-headline">
+          Premium tech,<br />delivered fast.
+        </div>
+        <div className="login-left-sub">
+          The best peripherals, accessories, and gear — curated for professionals and enthusiasts.
+        </div>
+        <div className="login-left-features">
+          {['Free shipping on all orders', 'Easy returns within 30 days', 'Store credits on every purchase'].map(f => (
+            <div className="login-feature" key={f}>
+              <span className="login-feature-dot" />
+              {f}
+            </div>
+          ))}
+        </div>
       </div>
 
-      <div className="login-card">
-        <h2 className="login-card-heading">Sign in to your account</h2>
+      <div className="login-right">
+        <div className="login-right-logo">TechNest.</div>
+        <div className="login-card">
+          <h1 className="login-heading">Sign in</h1>
+          <p className="login-subheading">Welcome back. Enter your credentials to continue.</p>
 
-        <form className="login-form" onSubmit={handleSubmit}>
-          <div className="field-group">
-            <label className="field-label" htmlFor="email">Email</label>
-            <input
-              id="email"
-              className="field-input"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              autoComplete="email"
-              required
-            />
-          </div>
-
-          <div className="field-group">
-            <label className="field-label" htmlFor="password">Password</label>
-            <input
-              id="password"
-              className="field-input"
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
-          </div>
-
-          {error && <div className="login-error">{error}</div>}
-
-          <button className="btn-primary btn-full btn-large" type="submit" disabled={!users.length}>
-            {users.length ? 'Sign In' : 'Loading...'}
-          </button>
-        </form>
-
-        <p className="auth-switch">
-          Don't have an account? <Link to="/signup" className="auth-link">Create one</Link>
-        </p>
-
-        <div className="demo-hint-section">
-          <button
-            className="demo-hint-toggle"
-            type="button"
-            onClick={() => setShowHints(h => !h)}
-          >
-            {showHints ? '▲ Hide' : '▼ Show'} demo accounts
-          </button>
-
-          {showHints && (
-            <div className="demo-accounts">
-              {users.map(u => (
-                <button key={u.id} className="demo-account-row" type="button" onClick={() => fillDemo(u)}>
-                  <div className="demo-account-info">
-                    <span className="demo-account-name">{u.name}</span>
-                    <span className="demo-account-email">{u.email}</span>
-                  </div>
-                  <span className="demo-account-balance">{fmt(u.balance)} credits</span>
-                </button>
-              ))}
-              <p className="demo-password-note">Password for all accounts: <code>{DEMO_PASSWORD}</code></p>
+          <form onSubmit={handleSubmit}>
+            <div className="field-group">
+              <label className="field-label" htmlFor="email">Email</label>
+              <input
+                id="email"
+                className="field-input"
+                type="email"
+                placeholder="you@example.com"
+                value={email}
+                onChange={e => setEmail(e.target.value)}
+                autoComplete="email"
+                required
+              />
             </div>
-          )}
+
+            <div className="field-group">
+              <label className="field-label" htmlFor="password">Password</label>
+              <input
+                id="password"
+                className="field-input"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+              />
+            </div>
+
+            {error && <div className="login-error">{error}</div>}
+
+            <button
+              className="btn-primary btn-full btn-large"
+              type="submit"
+              disabled={!users.length}
+              style={{ marginTop: 8 }}
+            >
+              {users.length ? 'Sign In' : 'Loading…'}
+            </button>
+          </form>
+
+          <p className="auth-switch" style={{ marginTop: 16 }}>
+            Don't have an account?{' '}
+            <Link to="/signup" className="auth-link">Create one</Link>
+          </p>
+
+          <div className="demo-hint-section">
+            <button
+              className="demo-hint-toggle"
+              type="button"
+              onClick={() => setShowHints(h => !h)}
+            >
+              {showHints ? '▲ Hide' : '▼ Show'} demo accounts
+            </button>
+
+            {showHints && (
+              <div className="demo-accounts">
+                {users.map(u => (
+                  <button key={u.id} className="demo-account-row" type="button" onClick={() => fillDemo(u)}>
+                    <div className="demo-account-info">
+                      <span className="demo-account-name">{u.name}</span>
+                      <span className="demo-account-email">{u.email}</span>
+                    </div>
+                    <span className="demo-account-balance">{fmt(u.balance)} credits</span>
+                  </button>
+                ))}
+                <p className="demo-password-note">
+                  Password for all accounts: <code>{DEMO_PASSWORD}</code>
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
