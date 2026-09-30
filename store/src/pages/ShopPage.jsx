@@ -7,10 +7,12 @@ export default function ShopPage() {
 
   if (loadError) {
     return (
-      <div style={{ padding: '40px 0', color: 'var(--red)' }}>
-        <strong>Could not load products:</strong> {loadError}
-        <p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 13 }}>
-          Run <code style={{ background: 'var(--surface-raised)', padding: '2px 6px', borderRadius: 4 }}>docker compose down -v &amp;&amp; docker compose up --build</code> to reset the database schema.
+      <div style={{ padding: '40px 0', textAlign: 'center' }}>
+        <p style={{ color: 'var(--red)', fontWeight: 600, fontSize: 16 }}>
+          We're having trouble loading products right now.
+        </p>
+        <p style={{ marginTop: 8, color: 'var(--text-secondary)', fontSize: 14 }}>
+          Please try refreshing the page. If the problem persists, the store may be temporarily unavailable.
         </p>
       </div>
     )
