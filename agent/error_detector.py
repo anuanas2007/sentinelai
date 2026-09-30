@@ -1,6 +1,7 @@
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Optional
 
 # ============================================================
@@ -180,8 +181,12 @@ class ErrorDetector:
     """
 
     def __init__(self):
-        # Sliding window for threshold errors
-        self.error_window: deque = deque()
+        # Per-event-type sliding windows for threshold errors.
+        # Previously a single shared deque, which meant one db_pool_exhausted
+        # + one payment_service_timeout + one external_api_timeout summed to 3
+        # and escalated the lone timeout to critical. Each event type now gets
+        # its own window so counts are never cross-contaminated.
+        self.error_windows: defaultdict = defaultdict(deque)
 
         # Per-event-type counts for pattern analysis
         self.error_counts: defaultdict = defaultdict(int)
@@ -223,16 +228,38 @@ class ErrorDetector:
             # AI reasoning engine will classify it properly
             return "immediate"
 
-    def _clean_window(self):
-        """Remove errors outside sliding window. O(1) with deque."""
-        now = time.time()
-        cutoff = now - WINDOW_SECONDS
-        while self.error_window and self.error_window[0] < cutoff:
-            self.error_window.popleft()
+    @staticmethod
+    def _event_time(log_entry: dict) -> float:
+        """
+        Extract event time from a log entry's ISO timestamp, falling back to
+        wall clock when the field is missing or unparseable.
 
-    def _current_error_rate(self) -> int:
-        self._clean_window()
-        return len(self.error_window)
+        Using the log line's own timestamp makes threshold detection
+        replayable and deterministic in tests — two calls with the same
+        log entry always produce the same result regardless of when the
+        test runs.
+        """
+        ts = log_entry.get("timestamp", "") if isinstance(log_entry, dict) else ""
+        if ts:
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except (ValueError, AttributeError):
+                pass
+        return time.time()
+
+    def _clean_window(self, event_name: str, cutoff: float) -> None:
+        """Remove timestamps outside sliding window for a specific event type."""
+        window = self.error_windows[event_name]
+        while window and window[0] < cutoff:
+            window.popleft()
+
+    def _current_error_rate(self, event_name: str, event_time: float) -> int:
+        cutoff = event_time - WINDOW_SECONDS
+        self._clean_window(event_name, cutoff)
+        return len(self.error_windows[event_name])
 
     def _detect_cascade(self, current: ErrorEvent) -> Optional[str]:
         """
@@ -342,9 +369,9 @@ class ErrorDetector:
         Threshold errors only produce incidents after pattern confirmed.
         Returns None if below threshold — just noise.
         """
-        now = time.time()
-        self.error_window.append(now)
-        error_count = self._current_error_rate()
+        now = error_event.wall_time
+        self.error_windows[error_event.event].append(now)
+        error_count = self._current_error_rate(error_event.event, now)
         # Capture upstream event BEFORE _detect_cascade runs (it reads self.last_error)
         upstream = self.last_error
         cascade = self._detect_cascade(error_event)
@@ -387,7 +414,6 @@ class ErrorDetector:
         Main entry point. Called by log collector for every error.
         Returns Incident if thresholds crossed, None if noise.
         """
-        now = time.time()
         event_name = log_entry.get("event", "unknown")
         error_class = self._classify_error(event_name)
 
@@ -395,7 +421,7 @@ class ErrorDetector:
             event=event_name,
             level=log_entry.get("level", "error"),
             timestamp=log_entry.get("timestamp", ""),
-            wall_time=now,
+            wall_time=self._event_time(log_entry),
             error_class=error_class,
             context={
                 k: v for k, v in log_entry.items()
@@ -420,8 +446,13 @@ class ErrorDetector:
 
     def get_stats(self) -> dict:
         """Current detector stats — feeds into dashboard in Week 3."""
+        now = time.time()
+        errors_in_window = sum(
+            len([t for t in window if t >= now - WINDOW_SECONDS])
+            for window in self.error_windows.values()
+        )
         return {
-            "errors_in_window": self._current_error_rate(),
+            "errors_in_window": errors_in_window,
             "total_incidents": self.incident_count,
             "immediate_incidents": self.immediate_count,
             "threshold_incidents": self.threshold_count,
